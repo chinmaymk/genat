@@ -1,0 +1,9 @@
+node_modules/
+dist/
+data/
+logs/
+*.sqlite
+.env
+# Bun build temp files (sometimes left in cwd when running bun build)
+*.bun-build
+docs/plans

@@ -96,8 +96,15 @@ export class Org {
           required: ['type', 'content'],
         },
         handler: async ({ type, content, tags }) => {
-          const id = teamMemory.save(agentId, type as string, content as string, (tags as string) ?? '');
-          return `Memory saved (id: ${id})`;
+          try {
+            if (typeof type !== 'string' || typeof content !== 'string') {
+              return 'Error: type and content must be strings';
+            }
+            const id = teamMemory.save(agentId, type, content, typeof tags === 'string' ? tags : '');
+            return `Memory saved (id: ${id})`;
+          } catch (err) {
+            return `Memory save failed: ${err instanceof Error ? err.message : String(err)}`;
+          }
         },
       })
       .register({
@@ -117,18 +124,28 @@ export class Org {
           required: ['query'],
         },
         handler: async ({ query, type, limit }) => {
-          const opts = { type: type as string | undefined, limit: (limit as number) ?? 10 };
-          const results = teamMemory.search(query as string, opts);
-          if (level === 'director' || level === 'executive') {
-            const execMem = this.getOrCreateTeamMemory('executive');
-            const execResults = execMem.search(query as string, opts);
-            const seen = new Set(results.map(r => r.id));
-            for (const r of execResults) {
-              if (!seen.has(r.id)) results.push(r);
+          try {
+            if (typeof query !== 'string') return 'Error: query must be a string';
+            const opts = {
+              type: typeof type === 'string' ? type : undefined,
+              limit: typeof limit === 'number' ? limit : 10,
+            };
+            const results = [...teamMemory.search(query, opts)];
+            if (level === 'director' || level === 'executive') {
+              const execMem = this.getOrCreateTeamMemory('executive');
+              if (execMem !== teamMemory) {
+                const execResults = execMem.search(query, opts);
+                const seen = new Set(results.map(r => r.id));
+                for (const r of execResults) {
+                  if (!seen.has(r.id)) results.push(r);
+                }
+              }
             }
+            if (results.length === 0) return 'No matching memories found.';
+            return results.map(r => `[${r.type}][${r.agentId}] ${r.content} (tags: ${r.tags})`).join('\n');
+          } catch (err) {
+            return `Memory search failed: ${err instanceof Error ? err.message : String(err)}`;
           }
-          if (results.length === 0) return 'No matching memories found.';
-          return results.map(r => `[${r.type}][${r.agentId}] ${r.content} (tags: ${r.tags})`).join('\n');
         },
       });
   }

@@ -1,4 +1,5 @@
 import { Database } from 'bun:sqlite';
+import type { Statement } from 'bun:sqlite';
 import { mkdirSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
@@ -15,11 +16,24 @@ export interface Memory {
 
 export class TeamMemory {
   private db: Database;
+  private stmtInsert: Statement;
+  private stmtRecent: Statement;
+  private stmtDelete: Statement;
 
   constructor(sqlitePath: string) {
     mkdirSync(join(sqlitePath, '..'), { recursive: true });
     this.db = new Database(sqlitePath);
     this.migrate();
+    this.stmtInsert = this.db.prepare(
+      `INSERT INTO memories (id, agent_id, type, content, tags, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    this.stmtRecent = this.db.prepare(
+      `SELECT id, agent_id as agentId, type, content, tags,
+              created_at as createdAt, updated_at as updatedAt
+       FROM memories ORDER BY created_at DESC, rowid DESC LIMIT ?`
+    );
+    this.stmtDelete = this.db.prepare(`DELETE FROM memories WHERE id = ?`);
   }
 
   private migrate(): void {
@@ -63,10 +77,7 @@ export class TeamMemory {
   save(agentId: string, type: string, content: string, tags = ''): string {
     const id = randomUUID();
     const now = Date.now();
-    this.db.prepare(
-      `INSERT INTO memories (id, agent_id, type, content, tags, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, agentId, type, content, tags, now, now);
+    this.stmtInsert.run(id, agentId, type, content, tags, now, now);
     return id;
   }
 
@@ -93,14 +104,14 @@ export class TeamMemory {
   }
 
   recent(limit: number): Memory[] {
-    return this.db.prepare(
-      `SELECT id, agent_id as agentId, type, content, tags,
-              created_at as createdAt, updated_at as updatedAt
-       FROM memories ORDER BY created_at DESC LIMIT ?`
-    ).all(limit) as Memory[];
+    return this.stmtRecent.all(limit) as Memory[];
   }
 
   delete(id: string): void {
-    this.db.prepare(`DELETE FROM memories WHERE id = ?`).run(id);
+    this.stmtDelete.run(id);
+  }
+
+  close(): void {
+    this.db.close();
   }
 }

@@ -56,7 +56,7 @@ describe('TeamMemory', () => {
     expect(mem.recent(10)).toHaveLength(0);
   });
 
-  test('creates DB lazily on first use', () => {
+  test('returns empty array for fresh database', () => {
     const mem = new TeamMemory(dbPath);
     expect(mem.recent(1)).toEqual([]);
   });

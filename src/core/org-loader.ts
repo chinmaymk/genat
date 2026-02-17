@@ -56,14 +56,14 @@ export class OrgLoader {
     const level = fm.level ?? 'ic';
 
     const role: RoleConfig = {
-      id: fm.id ?? roleId,
-      title: fm.title ?? roleId,
-      level,
-      reportsTo: fm.reports_to ?? fm.reportsTo ?? '',
-      skills: Array.isArray(fm.skills) ? fm.skills : [],
-      model: fm.model ?? { provider: 'anthropic' },
+      id: typeof fm.id === 'string' ? fm.id : roleId,
+      title: typeof fm.title === 'string' ? fm.title : roleId,
+      level: typeof fm.level === 'string' ? fm.level : 'ic',
+      reportsTo: typeof fm.reports_to === 'string' ? fm.reports_to : typeof fm.reportsTo === 'string' ? fm.reportsTo : '',
+      skills: Array.isArray(fm.skills) ? (fm.skills as string[]) : [],
+      model: (fm.model as { provider: string; pinned?: string }) ?? { provider: 'anthropic' },
       systemPrompt: body,
-      channels: fm.channels,
+      channels: Array.isArray(fm.channels) ? (fm.channels as string[]) : undefined,
     };
 
     if (role.model.provider === 'interview') {

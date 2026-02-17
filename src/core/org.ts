@@ -76,8 +76,6 @@ export class Org {
       llm: this.llm,
       tools,
       channelManager: this.channelManager,
-      getDirectReports: (mid) => this.getDirectReports(mid),
-      getExclusiveChannelRole: (ch) => this.getExclusiveChannelRole(ch),
     });
   }
 
@@ -168,10 +166,4 @@ export class Org {
     return Array.from(this.members.values()).filter((m) => m.reportsTo === managerId);
   }
 
-  getExclusiveChannelRole(channelId: string): string | undefined {
-    for (const agent of this.agents.values()) {
-      if (agent.role.handles_channels?.includes(channelId)) return agent.role.id;
-    }
-    return undefined;
-  }
 }

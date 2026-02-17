@@ -7,6 +7,7 @@ import { logger } from '../logger';
 import type { ILLMClient } from './llm-client';
 import type { ToolRegistry } from './tool-registry';
 import type { ChannelConfig } from './org-loader';
+import type { TeamMemory } from './team-memory';
 
 export interface RoleConfig {
   id: string;
@@ -35,6 +36,7 @@ export interface AgentContext {
   llm: ILLMClient;
   tools: ToolRegistry;
   channelManager: ChannelManager;
+  teamMemory: TeamMemory;
 }
 
 export class Agent {
@@ -52,6 +54,7 @@ export class Agent {
   private llm: ILLMClient;
   private tools: ToolRegistry;
   private channelMgr: ChannelManager;
+  private teamMemory: TeamMemory;
 
   constructor(context: AgentContext) {
     this.id = context.agentId;
@@ -64,6 +67,7 @@ export class Agent {
     this.llm = context.llm;
     this.tools = context.tools;
     this.channelMgr = context.channelManager;
+    this.teamMemory = context.teamMemory;
   }
 
   private buildSystemPrompt(): string {
@@ -171,7 +175,13 @@ export class Agent {
     const rootId = msg.threadId ?? msg.id;
     const thread = channel.getThread(rootId);
     const threadText = thread.map(m => `[${m.from}]: ${m.content}`).join('\n');
-    const input = `[Channel: #${msg.channel}]\n${threadText}`;
+
+    const recent = this.teamMemory.recent(10);
+    const memoryPrefix = recent.length > 0
+      ? `## Recent Team Memory\n${recent.map(m => `[${m.type}][${m.agentId}] ${m.content}`).join('\n')}\n\n`
+      : '';
+
+    const input = `${memoryPrefix}[Channel: #${msg.channel}]\n${threadText}`;
 
     const response = await this.think(input);
 

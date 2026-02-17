@@ -5,6 +5,8 @@ import type { ILLMClient } from './llm-client';
 import { ToolRegistry } from './tool-registry';
 import { ToolRunner } from './tool-runner';
 import { OrgLoader, type OrgMember, type ChannelConfig } from './org-loader';
+import { TeamMemory } from './team-memory';
+import { join } from 'path';
 
 export type { OrgMember, ChannelConfig };
 
@@ -12,13 +14,23 @@ export class Org {
   private members: Map<string, OrgMember> = new Map();
   private agents: Map<string, Agent> = new Map();
   private channels: ChannelConfig[] = [];
+  private teamMemories: Map<string, TeamMemory> = new Map();
 
   constructor(
     private loader: OrgLoader,
     private channelManager: ChannelManager,
     private llm: ILLMClient,
     private toolRunner: ToolRunner,
+    private agentOrgDir: string,
   ) {}
+
+  private getOrCreateTeamMemory(teamName: string): TeamMemory {
+    if (!this.teamMemories.has(teamName)) {
+      const dbPath = join(this.agentOrgDir, 'teams', teamName, 'memory.sqlite');
+      this.teamMemories.set(teamName, new TeamMemory(dbPath));
+    }
+    return this.teamMemories.get(teamName)!;
+  }
 
   private buildToolRegistry(agentId: string, skills: SkillConfig[]): ToolRegistry {
     const cm = this.channelManager;
@@ -66,7 +78,7 @@ export class Org {
       });
   }
 
-  private async spawnAgent(id: string, member: OrgMember): Promise<Agent> {
+  private async spawnAgent(id: string, member: OrgMember, teamMemory: TeamMemory): Promise<Agent> {
     const role = await this.loader.loadRole(member.role);
     const skills = await this.loader.loadSkillsForRole(role, id);
     const tools = this.buildToolRegistry(id, skills);
@@ -76,12 +88,14 @@ export class Org {
       llm: this.llm,
       tools,
       channelManager: this.channelManager,
+      teamMemory,
     });
   }
 
   async boot(): Promise<void> {
     this.members = await this.loader.loadMembers();
     this.channels = await this.loader.loadChannels();
+    const teams = await this.loader.loadTeams();
 
     for (const ch of this.channels) {
       this.channelManager.create(ch.name);
@@ -93,7 +107,10 @@ export class Org {
 
     for (const [id, member] of this.members) {
       try {
-        const agent = await this.spawnAgent(id, member);
+        const role = await this.loader.loadRole(member.role);
+        const teamName = this.loader.resolveTeam(role.id, teams);
+        const teamMemory = this.getOrCreateTeamMemory(teamName);
+        const agent = await this.spawnAgent(id, member, teamMemory);
         this.agents.set(id, agent);
       } catch (err) {
         logger.error({ err, agentId: id }, 'Failed to instantiate agent');
@@ -125,7 +142,11 @@ export class Org {
       if (!prevIds.has(id)) {
         this.members.set(id, member);
         try {
-          const agent = await this.spawnAgent(id, member);
+          const role = await this.loader.loadRole(member.role);
+          const teams = await this.loader.loadTeams();
+          const teamName = this.loader.resolveTeam(role.id, teams);
+          const teamMemory = this.getOrCreateTeamMemory(teamName);
+          const agent = await this.spawnAgent(id, member, teamMemory);
           this.agents.set(id, agent);
           await agent.start();
         } catch (err) {

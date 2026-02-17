@@ -43,7 +43,7 @@ async function main() {
   let org: Org;
   const store = new OrgStore(orgFs, () => { void org?.reload(); });
   const loader = new OrgLoader(store);
-  org = new Org(loader, channels, llm, toolRunner);
+  org = new Org(loader, channels, llm, toolRunner, paths.agentOrgDir);
 
   logger.info({ phase: 'boot' }, 'Booting agents');
   await org.boot();

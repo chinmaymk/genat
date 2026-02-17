@@ -5,7 +5,7 @@ import {
 import { ChannelManager, normalizeChannelName, type ChannelMessage } from './channel.ts';
 import { isRelevant } from './message-relevance.ts';
 import { logger } from '../logger';
-import type { LLMClient } from './llm-client';
+import type { ILLMClient } from './llm-client';
 import type { ToolRegistry } from './tool-registry';
 import type { OrgMember, ChannelConfig } from './org-loader';
 
@@ -39,7 +39,7 @@ export interface AgentContext {
   skills: SkillConfig[];
   agentId: string;
   channels?: ChannelConfig[];
-  llm: LLMClient;
+  llm: ILLMClient;
   tools: ToolRegistry;
   channelManager: ChannelManager;
   getDirectReports: (id: string) => OrgMember[];
@@ -60,7 +60,7 @@ export class Agent {
   private log: ReturnType<typeof logger.child>;
   private _systemPrompt: string | null = null;
   private channels: ChannelConfig[];
-  private llm: LLMClient;
+  private llm: ILLMClient;
   private tools: ToolRegistry;
   private channelMgr: ChannelManager;
   private getDirectReportsCb: (id: string) => OrgMember[];

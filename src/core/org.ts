@@ -1,7 +1,7 @@
 import { Agent, type RoleConfig, type SkillConfig } from './agent.ts';
 import { ChannelManager } from './channel.ts';
 import { logger } from '../logger';
-import { LLMClient } from './llm-client';
+import type { ILLMClient } from './llm-client';
 import { ToolRegistry } from './tool-registry';
 import { ToolRunner } from './tool-runner';
 import { OrgLoader, type OrgMember, type ChannelConfig } from './org-loader';
@@ -16,7 +16,7 @@ export class Org {
   constructor(
     private loader: OrgLoader,
     private channelManager: ChannelManager,
-    private llm: LLMClient,
+    private llm: ILLMClient,
     private toolRunner: ToolRunner,
   ) {}
 

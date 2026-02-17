@@ -4,6 +4,14 @@ import {
 } from '@chinmaymk/aikit';
 import { logger } from '../logger';
 
+/** Interface for any LLM backend (real or dummy). Used so agents can use DummyLLMClient when USE_DUMMY_LLM=1. */
+export interface ILLMClient {
+  chat(
+    messages: Message[],
+    options?: { tools?: Tool[]; model?: string; provider?: string }
+  ): Promise<StreamResult>;
+}
+
 export const DEFAULT_MODEL: Record<string, string> = {
   anthropic: 'claude-sonnet-4-20250514',
   openai: 'gpt-4o',
@@ -19,7 +27,7 @@ const API_KEY_ENV: Record<string, string> = {
 const RATE_LIMIT_RETRIES = 3;
 const RATE_LIMIT_BASE_MS = 60_000;
 
-export class LLMClient {
+export class LLMClient implements ILLMClient {
   private providers = new Map<string, AnyGenerationProvider>();
   private maxConcurrent: number;
   private inFlight = 0;

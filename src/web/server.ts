@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { createRoutes } from './routes';
 import type { RouteContext } from './routes';
-import { join } from 'path';
 import { logger } from '../logger';
 import type { LayeredFs } from '../core/layered-fs';
 import { getIndexHtml } from './index-html';
@@ -30,55 +29,33 @@ function rejectPathEscape(path: string): boolean {
   return path.includes('..') || path.includes('/') || path.includes('\\');
 }
 
-export function createServer(port = 3000, ctx: RouteContext, uiLayeredFs?: LayeredFs) {
+export function createServer(port = 3000, ctx: RouteContext, uiLayeredFs: LayeredFs) {
   const app = new Hono();
   logger.info({ port }, 'Web server created');
 
   app.route('/api', createRoutes(ctx));
 
-  if (uiLayeredFs) {
-    app.get('/assets/:filename', async (c) => {
-      const filename = c.req.param('filename');
-      if (rejectPathEscape(filename)) {
-        return c.json({ error: 'Invalid path' }, 400);
-      }
-      const buf = await uiLayeredFs.readFileBinary(filename);
-      if (buf === null) {
-        return c.notFound();
-      }
-      return new Response(buf, {
-        headers: { 'Content-Type': contentTypeFor(filename) },
-      });
-    });
-
-    app.get('*', async (c) => {
-      const indexContent = await uiLayeredFs.readFile('index.html');
-      if (indexContent !== null) {
-        return c.html(indexContent);
-      }
-      return c.html(getIndexHtml());
-    });
-  } else {
-    app.get('/assets/:filename', async (c) => {
-      const filename = c.req.param('filename');
-      if (rejectPathEscape(filename)) {
-        return c.json({ error: 'Invalid path' }, 400);
-      }
-      const filePath = join(process.cwd(), 'dist', 'ui', filename);
-      const file = Bun.file(filePath);
-      if (await file.exists()) {
-        const bytes = await file.arrayBuffer();
-        return new Response(bytes, {
-          headers: { 'Content-Type': contentTypeFor(filename) },
-        });
-      }
+  app.get('/assets/:filename', async (c) => {
+    const filename = c.req.param('filename');
+    if (rejectPathEscape(filename)) {
+      return c.json({ error: 'Invalid path' }, 400);
+    }
+    const buf = await uiLayeredFs.readFileBinary(filename);
+    if (buf === null) {
       return c.notFound();
+    }
+    return new Response(buf, {
+      headers: { 'Content-Type': contentTypeFor(filename) },
     });
+  });
 
-    app.get('*', (c) => {
-      return c.html(getIndexHtml());
-    });
-  }
+  app.get('*', async (c) => {
+    const indexContent = await uiLayeredFs.readFile('index.html');
+    if (indexContent !== null) {
+      return c.html(indexContent);
+    }
+    return c.html(getIndexHtml());
+  });
 
   return { app, port };
 }

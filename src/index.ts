@@ -2,7 +2,7 @@ import { join } from 'path';
 import { getPathConfig, ensureWritableDirs, requireDefaultOrg } from './config/paths';
 import { initLogger } from './logger';
 import { createLayeredFs } from './core/layered-fs';
-import { createOrgStore } from './core/org-store';
+import { OrgStore } from './core/org-store';
 import { createLayeredMemoryStore, createLayeredTaskManager } from './core/layered-data';
 import { setTaskManager } from './core/task-manager';
 import { setMemoryStore } from './memory/store';
@@ -30,7 +30,7 @@ async function main() {
     userDir: paths.userUiDir,
   });
 
-  const orgStore = createOrgStore(orgLayeredFs, () => {
+  const orgStore = new OrgStore(orgLayeredFs, () => {
     void orgManager.reloadOrg();
   });
   orgManager.setOrgStore(orgStore);

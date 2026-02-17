@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { join } from 'path';
 import { OrgManager } from '../src/core/org';
 import { createLayeredFs } from '../src/core/layered-fs';
-import { createOrgStore } from '../src/core/org-store';
+import { OrgStore } from '../src/core/org-store';
 
 const orgDir = join(process.cwd(), 'org');
 
@@ -12,7 +12,7 @@ function createTestOrgStore() {
     agentDir: orgDir,
     userDir: orgDir,
   });
-  return createOrgStore(layeredFs);
+  return new OrgStore(layeredFs);
 }
 
 describe('OrgManager', () => {

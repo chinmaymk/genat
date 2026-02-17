@@ -19,15 +19,7 @@ export class KnowledgeBase {
       return;
     }
 
-    const names = await store.listKnowledgeNames();
-    for (const name of names) {
-      const content = await store.readKnowledge(name);
-      if (content !== null) {
-        this.docs.set(name, content);
-      }
-    }
-
-    console.log(`[KnowledgeBase] Loaded ${this.docs.size} document(s): [${[...this.docs.keys()].join(', ')}]`);
+    console.log('[KnowledgeBase] load() is a no-op; knowledge store methods have been removed.');
   }
 
   reload(): void {

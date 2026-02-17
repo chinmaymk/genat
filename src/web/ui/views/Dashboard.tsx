@@ -1,45 +1,25 @@
 import React from 'react';
 import { apiFetch, formatTime } from '../api';
-import type { ChannelSummary, ChannelMessage, OrgMember, QueueSummary, Task } from '../types';
+import type { ChannelSummary, ChannelMessage, OrgMember } from '../types';
 
 export function DashboardView() {
-  const [stats, setStats] = React.useState({
-    agents: 0,
-    channels: 0,
-    tasks: 0,
-    queueDepth: 0,
-  });
-
+  const [stats, setStats] = React.useState({ agents: 0, channels: 0 });
   const [activity, setActivity] = React.useState<ChannelMessage[]>([]);
 
   const load = React.useCallback(async () => {
     try {
-      const [chData, qData] = await Promise.all([
+      const [chData, orgData] = await Promise.all([
         apiFetch<{ channels: ChannelSummary[] }>('/channels'),
-        apiFetch<{ queues: QueueSummary[] }>('/queues'),
+        apiFetch<{ members: OrgMember[] }>('/org').catch(() => ({ members: [] })),
       ]);
-
-      const orgData = await apiFetch<{ members: OrgMember[] }>('/org').catch(() => ({ members: [] }));
-      const tasksData = await apiFetch<{ tasks: Task[] }>('/tasks').catch(() => ({ tasks: [] }));
-
-      const queueDepth = qData.queues.reduce((s, q) => s + q.queued, 0);
-
-      setStats({
-        agents: orgData.members.length,
-        channels: chData.channels.length,
-        tasks: tasksData.tasks.length,
-        queueDepth,
-      });
-
+      setStats({ agents: orgData.members.length, channels: chData.channels.length });
       const msgs: ChannelMessage[] = [];
       for (const ch of chData.channels) {
         if (ch.latestMessage) msgs.push(ch.latestMessage);
       }
       msgs.sort((a, b) => b.timestamp - a.timestamp);
       setActivity(msgs.slice(0, 10));
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }, []);
 
   React.useEffect(() => {
@@ -63,14 +43,6 @@ export function DashboardView() {
         <div className="stat-card">
           <div className="stat-value">{stats.channels}</div>
           <div className="stat-label">Open Channels</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{stats.tasks}</div>
-          <div className="stat-label">Tasks</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{stats.queueDepth}</div>
-          <div className="stat-label">Queue Depth</div>
         </div>
       </div>
 

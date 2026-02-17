@@ -3,15 +3,11 @@ import { apiFetch } from './api';
 import type { View } from './types';
 import { DashboardView } from './views/Dashboard';
 import { ChannelsView } from './views/Channels';
-import { TasksView } from './views/Tasks';
-import { QueuesView } from './views/Queues';
 import { OrgView } from './views/Org';
 
 const NAV_ITEMS: { id: View; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '⬛' },
   { id: 'channels', label: 'Channels', icon: '💬' },
-  { id: 'tasks', label: 'Tasks', icon: '📋' },
-  { id: 'queues', label: 'Work Queues', icon: '📬' },
   { id: 'org', label: 'Org Chart', icon: '🏢' },
 ];
 
@@ -82,8 +78,6 @@ export function App() {
         <main className="main">
           {view === 'dashboard' && <DashboardView />}
           {view === 'channels' && <ChannelsView />}
-          {view === 'tasks' && <TasksView />}
-          {view === 'queues' && <QueuesView />}
           {view === 'org' && <OrgView />}
         </main>
       </div>

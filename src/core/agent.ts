@@ -2,12 +2,12 @@ import {
   systemText, userText, assistantText, assistantWithToolCalls, toolResult as toolResultMsg,
   type Message,
 } from '@chinmaymk/aikit';
-import { ChannelManager, type ChannelMessage } from './channel.ts';
+import { ChannelManager, normalizeChannelName, type ChannelMessage } from './channel.ts';
 import { isRelevant } from './message-relevance.ts';
 import { logger } from '../logger';
 import type { LLMClient } from './llm-client';
 import type { ToolRegistry } from './tool-registry';
-import type { OrgMember } from './org-loader';
+import type { OrgMember, ChannelConfig } from './org-loader';
 
 export interface RoleConfig {
   id: string;
@@ -32,11 +32,6 @@ export interface SkillConfig {
   name: string;
   tool: string;
   content: string;
-}
-
-export interface ChannelConfig {
-  name: string;
-  purpose: string;
 }
 
 export interface AgentContext {
@@ -146,7 +141,7 @@ export class Agent {
     const allChannels = this.channelMgr.list();
     const channelNames =
       this.role.channels?.length
-        ? this.role.channels.map((c) => (c.startsWith('#') ? c.slice(1) : c))
+        ? this.role.channels.map(normalizeChannelName)
         : allChannels;
     for (const channelName of channelNames) {
       try {

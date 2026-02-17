@@ -12,12 +12,12 @@ export class Org {
   private members: Map<string, OrgMember> = new Map();
   private agents: Map<string, Agent> = new Map();
   private channels: ChannelConfig[] = [];
-  private toolRunner = new ToolRunner();
 
   constructor(
     private loader: OrgLoader,
     private channelManager: ChannelManager,
     private llm: LLMClient,
+    private toolRunner: ToolRunner,
   ) {}
 
   private buildToolRegistry(agentId: string, skills: SkillConfig[]): ToolRegistry {

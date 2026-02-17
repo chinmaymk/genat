@@ -6,6 +6,7 @@ import { OrgStore } from './core/org-store';
 import { OrgLoader } from './core/org-loader';
 import { ChannelManager } from './core/channel';
 import { LLMClient } from './core/llm-client';
+import { ToolRunner } from './core/tool-runner';
 import { MessageRouter } from './core/message-router';
 import { Org } from './core/org';
 import { createServer } from './web/server';
@@ -31,12 +32,13 @@ async function main() {
 
   const channels = new ChannelManager();
   const llm = new LLMClient();
+  const toolRunner = new ToolRunner();
 
   // store callback references org.reload() — use let + closure so org can be assigned after
   let org: Org;
   const store = new OrgStore(orgFs, () => { void org?.reload(); });
   const loader = new OrgLoader(store);
-  org = new Org(loader, channels, llm);
+  org = new Org(loader, channels, llm, toolRunner);
 
   const router = new MessageRouter(org, channels);
   channels.setRouter((msg, ids) => router.select(msg, ids));

@@ -32,7 +32,7 @@ export class Org {
     return this.teamMemories.get(teamName)!;
   }
 
-  private buildToolRegistry(agentId: string, skills: SkillConfig[]): ToolRegistry {
+  private buildToolRegistry(agentId: string, skills: SkillConfig[], teamMemory: TeamMemory, level: string): ToolRegistry {
     const cm = this.channelManager;
     const runner = this.toolRunner;
     return new ToolRegistry()
@@ -75,13 +75,68 @@ export class Org {
             stderr: result.stderr.slice(0, 1000),
           });
         },
+      })
+      .register({
+        name: 'save_memory',
+        description: 'Save a lesson, decision, or fact to team memory for future reference',
+        schema: {
+          type: 'object',
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['decision', 'lesson', 'fact'],
+              description: 'Type of memory',
+            },
+            content: { type: 'string', description: 'The memory content' },
+            tags: {
+              type: 'string',
+              description: 'Comma-separated tags, e.g. "api,github,rate-limits"',
+            },
+          },
+          required: ['type', 'content'],
+        },
+        handler: async ({ type, content, tags }) => {
+          const id = teamMemory.save(agentId, type as string, content as string, (tags as string) ?? '');
+          return `Memory saved (id: ${id})`;
+        },
+      })
+      .register({
+        name: 'search_memory',
+        description: 'Search team memory for relevant knowledge before acting',
+        schema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Full-text search query' },
+            type: {
+              type: 'string',
+              enum: ['decision', 'lesson', 'fact'],
+              description: 'Optional: filter by memory type',
+            },
+            limit: { type: 'number', description: 'Max results (default 10)' },
+          },
+          required: ['query'],
+        },
+        handler: async ({ query, type, limit }) => {
+          const opts = { type: type as string | undefined, limit: (limit as number) ?? 10 };
+          const results = teamMemory.search(query as string, opts);
+          if (level === 'director' || level === 'executive') {
+            const execMem = this.getOrCreateTeamMemory('executive');
+            const execResults = execMem.search(query as string, opts);
+            const seen = new Set(results.map(r => r.id));
+            for (const r of execResults) {
+              if (!seen.has(r.id)) results.push(r);
+            }
+          }
+          if (results.length === 0) return 'No matching memories found.';
+          return results.map(r => `[${r.type}][${r.agentId}] ${r.content} (tags: ${r.tags})`).join('\n');
+        },
       });
   }
 
   private async spawnAgent(id: string, member: OrgMember, teamMemory: TeamMemory): Promise<Agent> {
     const role = await this.loader.loadRole(member.role);
     const skills = await this.loader.loadSkillsForRole(role, id);
-    const tools = this.buildToolRegistry(id, skills);
+    const tools = this.buildToolRegistry(id, skills, teamMemory, role.level);
     return new Agent({
       agentId: id, role, skills,
       channels: this.channels,
@@ -159,7 +214,10 @@ export class Org {
           try {
             const role = await this.loader.loadRole(member.role);
             const skills = await this.loader.loadSkillsForRole(role, id);
-            const tools = this.buildToolRegistry(id, skills);
+            const teams = await this.loader.loadTeams();
+            const teamName = this.loader.resolveTeam(role.id, teams);
+            const teamMemory = this.getOrCreateTeamMemory(teamName);
+            const tools = this.buildToolRegistry(id, skills, teamMemory, role.level);
             agent.updateRoleAndSkills(role, skills, this.channels);
             agent.updateTools(tools);
           } catch (err) {

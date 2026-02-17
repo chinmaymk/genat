@@ -2,12 +2,11 @@ import {
   systemText, userText, assistantText, assistantWithToolCalls, toolResult as toolResultMsg,
   type Message,
 } from '@chinmaymk/aikit';
-import { ChannelManager, normalizeChannelName, type ChannelMessage } from './channel.ts';
-import { isRelevant } from './message-relevance.ts';
+import { Channel, ChannelManager, normalizeChannelName, type ChannelMessage } from './channel.ts';
 import { logger } from '../logger';
 import type { ILLMClient } from './llm-client';
 import type { ToolRegistry } from './tool-registry';
-import type { OrgMember, ChannelConfig } from './org-loader';
+import type { ChannelConfig } from './org-loader';
 
 export interface RoleConfig {
   id: string;
@@ -42,8 +41,6 @@ export interface AgentContext {
   llm: ILLMClient;
   tools: ToolRegistry;
   channelManager: ChannelManager;
-  getDirectReports: (id: string) => OrgMember[];
-  getExclusiveChannelRole: (channelId: string) => string | undefined;
 }
 
 export class Agent {
@@ -55,16 +52,12 @@ export class Agent {
   private skills: SkillConfig[];
   private conversationHistory: Message[];
   private running: boolean;
-  private processing: boolean;
-  private messageQueue: ChannelMessage[];
   private log: ReturnType<typeof logger.child>;
   private _systemPrompt: string | null = null;
   private channels: ChannelConfig[];
   private llm: ILLMClient;
   private tools: ToolRegistry;
   private channelMgr: ChannelManager;
-  private getDirectReportsCb: (id: string) => OrgMember[];
-  private getExclusiveChannelRoleCb: (ch: string) => string | undefined;
 
   constructor(context: AgentContext) {
     this.id = context.agentId;
@@ -73,14 +66,10 @@ export class Agent {
     this.channels = context.channels ?? [];
     this.conversationHistory = [];
     this.running = false;
-    this.processing = false;
-    this.messageQueue = [];
     this.log = logger.child({ agentId: this.id });
     this.llm = context.llm;
     this.tools = context.tools;
     this.channelMgr = context.channelManager;
-    this.getDirectReportsCb = context.getDirectReports;
-    this.getExclusiveChannelRoleCb = context.getExclusiveChannelRole;
   }
 
   private buildSystemPrompt(): string {
@@ -118,20 +107,14 @@ export class Agent {
       'Think step by step. After completing tool calls, assess if further action is needed.',
       '',
       '## Message Handling Rules',
-      '- Only respond to messages that are directed at you or require action from your role.',
-      '- Messages from "board" are directives — always respond to these.',
-      `- Messages mentioning your id "${this.id}" or your role "${this.role.id}" are for you.`,
-      '- Messages from your direct reports are for you if they are asking for guidance or reporting status.',
-      '- Do NOT respond to messages between other agents that do not concern you.',
-      '- If a message is not relevant to you, respond with just the text "NO_ACTION" and nothing else.',
+      '- You receive messages from channels you monitor.',
+      '- You see the full thread context — respond to the most recent message.',
+      `- When replying, use post_message with threadId set to the root message id to keep replies in-thread.`,
+      '- If a message does not require action from you, respond with just the text "NO_ACTION" and nothing else.',
     );
 
     this._systemPrompt = parts.join('\n');
     return this._systemPrompt;
-  }
-
-  private isMessageRelevant(msg: ChannelMessage): boolean {
-    return isRelevant(msg, this.id, this.role, this.getDirectReportsCb, this.getExclusiveChannelRoleCb);
   }
 
   async start(): Promise<void> {
@@ -139,23 +122,37 @@ export class Agent {
     this.running = true;
 
     const allChannels = this.channelMgr.list();
-    const channelNames =
-      this.role.channels?.length
-        ? this.role.channels.map(normalizeChannelName)
-        : allChannels;
-    for (const channelName of channelNames) {
-      try {
-        if (!this.channelMgr.get(channelName)) continue;
-        this.channelMgr.subscribe(channelName, this.id, (msg: ChannelMessage) => {
-          if (!this.isMessageRelevant(msg)) return;
-          this.enqueueMessage(msg);
-        });
-      } catch {
-        // Channel may not exist yet
-      }
-    }
+    const channelNames = this.role.channels?.length
+      ? this.role.channels.map(normalizeChannelName)
+      : allChannels;
 
     this.log.info({ role: this.role.title, channels: channelNames.length }, 'Agent started');
+    this.poll(channelNames);
+  }
+
+  private async poll(channelNames: string[]): Promise<void> {
+    while (this.running) {
+      let foundWork = false;
+      for (const name of channelNames) {
+        const channel = this.channelMgr.get(name);
+        if (!channel) continue;
+        const msg = channel.nextPending(this.id);
+        if (msg) {
+          channel.claim(msg.id, this.id);
+          try {
+            await this.handleMessage(msg, channel);
+          } catch (err) {
+            this.log.error({ err, messageId: msg.id }, 'Error handling message');
+            channel.done(msg.id);
+          }
+          foundWork = true;
+          break;
+        }
+      }
+      if (!foundWork) {
+        await Bun.sleep(1000);
+      }
+    }
   }
 
   stop(): void {
@@ -174,51 +171,23 @@ export class Agent {
     this.tools = tools;
   }
 
-  private enqueueMessage(msg: ChannelMessage): void {
-    this.messageQueue.push(msg);
-    this.log.debug(
-      { messageId: msg.id, channel: msg.channel, from: msg.from, queueLength: this.messageQueue.length },
-      'Message enqueued'
-    );
-    this.processNextMessage();
-  }
-
-  private async processNextMessage(): Promise<void> {
-    if (this.processing) return;
-    if (this.messageQueue.length === 0) return;
-
-    this.processing = true;
-    try {
-      while (this.messageQueue.length > 0 && this.running) {
-        const msg = this.messageQueue.shift()!;
-        try {
-          await this.handleMessage(msg);
-        } catch (err) {
-          this.log.error(
-            { err, messageId: msg.id, channel: msg.channel },
-            'Error handling message'
-          );
-        }
-      }
-    } finally {
-      this.processing = false;
-    }
-  }
-
-  async handleMessage(msg: ChannelMessage): Promise<void> {
+  async handleMessage(msg: ChannelMessage, channel: Channel): Promise<void> {
     this.log.info({ messageId: msg.id, channel: msg.channel, from: msg.from }, 'Handling message');
-    this.channelMgr.claim(msg.id, this.id);
 
-    const input = `[Channel: #${msg.channel}] [From: ${msg.from}]: ${msg.content}`;
+    const rootId = msg.threadId ?? msg.id;
+    const thread = channel.getThread(rootId);
+    const threadText = thread.map(m => `[${m.from}]: ${m.content}`).join('\n');
+    const input = `[Channel: #${msg.channel}]\n${threadText}`;
+
     const response = await this.think(input);
 
-    if (response.trim() === 'NO_ACTION') {
-      this.log.debug({ messageId: msg.id }, 'Message skipped (NO_ACTION) — releasing');
-      this.channelMgr.release(msg.id);
-      return;
+    if (response.trim() !== 'NO_ACTION') {
+      this.log.debug({ messageId: msg.id }, 'Response generated');
+    } else {
+      this.log.debug({ messageId: msg.id }, 'NO_ACTION — skipping reply');
     }
 
-    this.channelMgr.complete(msg.id);
+    channel.done(msg.id);
   }
 
   async send(channel: string, content: string, threadId?: string): Promise<void> {

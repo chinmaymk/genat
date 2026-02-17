@@ -46,6 +46,8 @@ function parseOrgLine(line: string): OrgMember | null {
 export class OrgLoader {
   constructor(private store: OrgStore) {}
 
+  getStore(): OrgStore { return this.store; }
+
   async loadMembers(): Promise<Map<string, OrgMember>> {
     const content = await this.store.readOrgMd();
     if (!content) throw new Error('org.md not found or empty');

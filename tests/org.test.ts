@@ -58,4 +58,26 @@ describe('OrgLoader', () => {
     expect(mgr).toBeDefined();
     expect(mgr!.id).toBe('eng-director');
   });
+
+  test('loadTeams returns role lists by team name', async () => {
+    const loader = createTestLoader();
+    const teams = await loader.loadTeams();
+    expect(teams.size).toBeGreaterThan(0);
+    const engRoles = teams.get('engineering');
+    expect(engRoles).toContain('swe');
+    expect(engRoles).toContain('eng-director');
+  });
+
+  test('resolveTeam returns team name for known role', async () => {
+    const loader = createTestLoader();
+    const teams = await loader.loadTeams();
+    expect(loader.resolveTeam('swe', teams)).toBe('engineering');
+    expect(loader.resolveTeam('eng-director', teams)).toBe('engineering');
+  });
+
+  test('resolveTeam returns executive for unknown role', async () => {
+    const loader = createTestLoader();
+    const teams = await loader.loadTeams();
+    expect(loader.resolveTeam('ceo', teams)).toBe('executive');
+  });
 });

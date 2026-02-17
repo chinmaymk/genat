@@ -48,6 +48,11 @@ export class OrgStore {
     return this.layeredFs.listDir('teams', { listFiles: true, stripExtension: '.md' });
   }
 
+  async readTeam(name: string): Promise<string | null> {
+    validateId(name, 'team name');
+    return this.layeredFs.readFile(`teams/${name}.md`);
+  }
+
   async writeRole(roleId: string, content: string): Promise<void> {
     validateId(roleId, 'roleId');
     await this.layeredFs.writeToAgent(`roles/${roleId}.md`, content);

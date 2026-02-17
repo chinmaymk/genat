@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { createRoutes } from './routes';
+import type { RouteContext } from './routes';
 import { join } from 'path';
 import { logger } from '../logger';
 import type { LayeredFs } from '../core/layered-fs';
@@ -29,11 +30,11 @@ function rejectPathEscape(path: string): boolean {
   return path.includes('..') || path.includes('/') || path.includes('\\');
 }
 
-export function createServer(port = 3000, uiLayeredFs?: LayeredFs) {
+export function createServer(port = 3000, ctx: RouteContext, uiLayeredFs?: LayeredFs) {
   const app = new Hono();
   logger.info({ port }, 'Web server created');
 
-  app.route('/api', createRoutes());
+  app.route('/api', createRoutes(ctx));
 
   if (uiLayeredFs) {
     app.get('/assets/:filename', async (c) => {

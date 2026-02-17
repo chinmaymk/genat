@@ -1,14 +1,14 @@
 import { Hono } from 'hono';
-import { channelManager } from '../../core/channel';
+import { ChannelManager } from '../../core/channel';
 
-export function createChannelsRoutes() {
+export function createChannelsRoutes(channels: ChannelManager) {
   const api = new Hono();
 
   // GET / — list all channels with summary info
   api.get('/', (c) => {
-    const names = channelManager.list();
-    const channels = names.map((name) => {
-      const ch = channelManager.get(name)!;
+    const names = channels.list();
+    const channelList = names.map((name) => {
+      const ch = channels.get(name)!;
       return {
         name,
         subscribers: Array.from(ch.subscribers),
@@ -16,13 +16,13 @@ export function createChannelsRoutes() {
         latestMessage: ch.messages.at(-1) ?? null,
       };
     });
-    return c.json({ channels });
+    return c.json({ channels: channelList });
   });
 
   // GET /:name — fetch channel messages (optional ?limit=N)
   api.get('/:name', (c) => {
     const name = c.req.param('name');
-    const channel = channelManager.get(name);
+    const channel = channels.get(name);
     if (!channel) {
       return c.json({ error: `Channel "${name}" not found` }, 404);
     }
@@ -47,7 +47,7 @@ export function createChannelsRoutes() {
   // POST /:name/messages — post a message to a channel
   api.post('/:name/messages', async (c) => {
     const name = c.req.param('name');
-    const channel = channelManager.get(name);
+    const channel = channels.get(name);
     if (!channel) {
       return c.json({ error: `Channel "${name}" not found` }, 404);
     }
@@ -68,7 +68,7 @@ export function createChannelsRoutes() {
     const threadId = body?.threadId?.trim();
 
     try {
-      const msg = channelManager.post(name, from, content, threadId);
+      const msg = channels.post(name, from, content, threadId);
       return c.json({ message: msg }, 201);
     } catch (err) {
       return c.json({ error: String(err) }, 500);

@@ -1,62 +1,60 @@
 import { describe, test, expect } from 'bun:test';
 import { join } from 'path';
-import { OrgManager } from '../src/core/org';
+import { OrgLoader } from '../src/core/org-loader';
 import { createLayeredFs } from '../src/core/layered-fs';
 import { OrgStore } from '../src/core/org-store';
 
 const orgDir = join(process.cwd(), 'org');
 
-function createTestOrgStore() {
+function createTestLoader() {
   const layeredFs = createLayeredFs({
     defaultDir: orgDir,
     agentDir: orgDir,
     userDir: orgDir,
   });
-  return new OrgStore(layeredFs);
+  const store = new OrgStore(layeredFs);
+  return new OrgLoader(store);
 }
 
-describe('OrgManager', () => {
+describe('OrgLoader', () => {
   test('loads org chart from org.md', async () => {
-    const org = new OrgManager();
-    org.setOrgStore(createTestOrgStore());
-    await org.loadOrg();
-    expect(org.members.size).toBe(3);
-    expect(org.members.get('ceo')).toEqual({ id: 'ceo', role: 'ceo', reportsTo: 'board' });
-    expect(org.members.get('swe-1')).toEqual({ id: 'swe-1', role: 'swe', reportsTo: 'eng-director' });
+    const loader = createTestLoader();
+    const members = await loader.loadMembers();
+    expect(members.size).toBe(3);
+    expect(members.get('ceo')).toEqual({ id: 'ceo', role: 'ceo', reportsTo: 'board' });
+    expect(members.get('swe-1')).toEqual({ id: 'swe-1', role: 'swe', reportsTo: 'eng-director' });
   });
 
   test('loads role config', async () => {
-    const org = new OrgManager();
-    org.setOrgStore(createTestOrgStore());
-    const role = await org.loadRole('swe');
+    const loader = createTestLoader();
+    const role = await loader.loadRole('swe');
     expect(role.id).toBe('swe');
     expect(role.title).toBe('Software Engineer');
     expect(role.skills.length).toBeGreaterThan(0);
   });
 
   test('loads skill config', async () => {
-    const org = new OrgManager();
-    org.setOrgStore(createTestOrgStore());
-    const skill = await org.loadSkill('code-with-claude');
+    const loader = createTestLoader();
+    const skill = await loader.loadSkill('code-with-claude');
     expect(skill.id).toBe('code-with-claude');
     expect(skill.tool).toBe('claude-code');
     expect(skill.content.length).toBeGreaterThan(0);
   });
 
-  test('getDirectReports', async () => {
-    const org = new OrgManager();
-    org.setOrgStore(createTestOrgStore());
-    await org.loadOrg();
-    const reports = org.getDirectReports('eng-director');
+  test('getDirectReports via members', async () => {
+    const loader = createTestLoader();
+    const members = await loader.loadMembers();
+    const reports = Array.from(members.values()).filter((m) => m.reportsTo === 'eng-director');
     expect(reports).toHaveLength(1);
     expect(reports[0].id).toBe('swe-1');
   });
 
-  test('getManager', async () => {
-    const org = new OrgManager();
-    org.setOrgStore(createTestOrgStore());
-    await org.loadOrg();
-    const mgr = org.getManager('swe-1');
+  test('getManager via members', async () => {
+    const loader = createTestLoader();
+    const members = await loader.loadMembers();
+    const swe1 = members.get('swe-1');
+    expect(swe1).toBeDefined();
+    const mgr = members.get(swe1!.reportsTo);
     expect(mgr).toBeDefined();
     expect(mgr!.id).toBe('eng-director');
   });

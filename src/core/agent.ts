@@ -2,12 +2,12 @@ import {
   systemText, userText, assistantText, assistantWithToolCalls, toolResult as toolResultMsg,
   type Message,
 } from '@chinmaymk/aikit';
-import { channelManager, type ChannelMessage } from './channel.ts';
+import { ChannelManager, type ChannelMessage } from './channel.ts';
 import { isRelevant } from './message-relevance.ts';
-import { orgManager } from './org.ts';
 import { logger } from '../logger';
 import type { LLMClient } from './llm-client';
 import type { ToolRegistry } from './tool-registry';
+import type { OrgMember } from './org-loader';
 
 export interface RoleConfig {
   id: string;
@@ -46,6 +46,9 @@ export interface AgentContext {
   channels?: ChannelConfig[];
   llm: LLMClient;
   tools: ToolRegistry;
+  channelManager: ChannelManager;
+  getDirectReports: (id: string) => OrgMember[];
+  getExclusiveChannelRole: (channelId: string) => string | undefined;
 }
 
 export class Agent {
@@ -64,6 +67,9 @@ export class Agent {
   private channels: ChannelConfig[];
   private llm: LLMClient;
   private tools: ToolRegistry;
+  private channelMgr: ChannelManager;
+  private getDirectReportsCb: (id: string) => OrgMember[];
+  private getExclusiveChannelRoleCb: (ch: string) => string | undefined;
 
   constructor(context: AgentContext) {
     this.id = context.agentId;
@@ -77,6 +83,9 @@ export class Agent {
     this.log = logger.child({ agentId: this.id });
     this.llm = context.llm;
     this.tools = context.tools;
+    this.channelMgr = context.channelManager;
+    this.getDirectReportsCb = context.getDirectReports;
+    this.getExclusiveChannelRoleCb = context.getExclusiveChannelRole;
   }
 
   private buildSystemPrompt(): string {
@@ -127,28 +136,22 @@ export class Agent {
   }
 
   private isMessageRelevant(msg: ChannelMessage): boolean {
-    return isRelevant(
-      msg,
-      this.id,
-      this.role,
-      (id) => orgManager.getDirectReports(id),
-      (ch) => orgManager.getExclusiveChannelRole(ch)
-    );
+    return isRelevant(msg, this.id, this.role, this.getDirectReportsCb, this.getExclusiveChannelRoleCb);
   }
 
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
 
-    const allChannels = channelManager.list();
+    const allChannels = this.channelMgr.list();
     const channelNames =
       this.role.channels?.length
         ? this.role.channels.map((c) => (c.startsWith('#') ? c.slice(1) : c))
         : allChannels;
     for (const channelName of channelNames) {
       try {
-        if (!channelManager.get(channelName)) continue;
-        channelManager.subscribe(channelName, this.id, (msg: ChannelMessage) => {
+        if (!this.channelMgr.get(channelName)) continue;
+        this.channelMgr.subscribe(channelName, this.id, (msg: ChannelMessage) => {
           if (!this.isMessageRelevant(msg)) return;
           this.enqueueMessage(msg);
         });
@@ -209,22 +212,22 @@ export class Agent {
 
   async handleMessage(msg: ChannelMessage): Promise<void> {
     this.log.info({ messageId: msg.id, channel: msg.channel, from: msg.from }, 'Handling message');
-    channelManager.claim(msg.id, this.id);
+    this.channelMgr.claim(msg.id, this.id);
 
     const input = `[Channel: #${msg.channel}] [From: ${msg.from}]: ${msg.content}`;
     const response = await this.think(input);
 
     if (response.trim() === 'NO_ACTION') {
       this.log.debug({ messageId: msg.id }, 'Message skipped (NO_ACTION) — releasing');
-      channelManager.release(msg.id);
+      this.channelMgr.release(msg.id);
       return;
     }
 
-    channelManager.complete(msg.id);
+    this.channelMgr.complete(msg.id);
   }
 
   async send(channel: string, content: string, threadId?: string): Promise<void> {
-    channelManager.post(channel, this.id, content, threadId);
+    this.channelMgr.post(channel, this.id, content, threadId);
   }
 
   private async think(input: string): Promise<string> {

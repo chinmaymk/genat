@@ -217,4 +217,3 @@ function normalizeChannelName(name: string): string {
   return name.startsWith('#') ? name.slice(1) : name;
 }
 
-export const channelManager = new ChannelManager();

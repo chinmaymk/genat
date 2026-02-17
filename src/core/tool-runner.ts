@@ -88,4 +88,3 @@ export class ToolRunner {
   }
 }
 
-export const toolRunner = new ToolRunner();

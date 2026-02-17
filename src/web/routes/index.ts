@@ -1,18 +1,19 @@
 import { Hono } from 'hono';
 import { createDirectivesRoutes } from './directives';
-import { createTasksRoutes } from './tasks';
 import { createChannelsRoutes } from './channels';
-import { createQueuesRoutes } from './queues';
 import { createOrgRoutes } from './org';
+import type { ChannelManager } from '../../core/channel';
+import type { Org } from '../../core/org';
 
-export function createRoutes() {
+export interface RouteContext {
+  channels: ChannelManager;
+  org: Org;
+}
+
+export function createRoutes(ctx: RouteContext) {
   const api = new Hono();
-
-  api.route('/directives', createDirectivesRoutes());
-  api.route('/tasks', createTasksRoutes());
-  api.route('/channels', createChannelsRoutes());
-  api.route('/queues', createQueuesRoutes());
-  api.route('/org', createOrgRoutes());
-
+  api.route('/directives', createDirectivesRoutes(ctx.channels));
+  api.route('/channels', createChannelsRoutes(ctx.channels));
+  api.route('/org', createOrgRoutes(ctx.org));
   return api;
 }

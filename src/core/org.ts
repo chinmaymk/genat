@@ -344,7 +344,9 @@ export class OrgManager {
       try {
         const role = await this.loadRole(member.role);
         const skills = await this.loadSkillsForRole(role, id);
+        const toolRegistry = this.buildToolRegistry(id, skills);
         agent.updateRoleAndSkills(role, skills, this.channels);
+        agent.updateTools(toolRegistry);
       } catch (err) {
         logger.warn({ err, agentId: id }, 'Failed to update agent during reload');
       }

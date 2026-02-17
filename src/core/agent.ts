@@ -172,6 +172,10 @@ export class Agent {
     this._systemPrompt = null;
   }
 
+  updateTools(tools: ToolRegistry): void {
+    this.tools = tools;
+  }
+
   private enqueueMessage(msg: ChannelMessage): void {
     this.messageQueue.push(msg);
     this.log.debug(

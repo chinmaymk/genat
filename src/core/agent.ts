@@ -1,17 +1,13 @@
 import {
   systemText, userText, assistantText, assistantWithToolCalls, toolResult as toolResultMsg,
-  createTool,
-  type Message, type Tool,
+  type Message,
 } from '@chinmaymk/aikit';
-import { chat, DEFAULT_MODEL } from './chat.ts';
 import { channelManager, type ChannelMessage } from './channel.ts';
 import { isRelevant } from './message-relevance.ts';
-import { workQueueManager } from './work-queue.ts';
-import { getTaskManager, type TaskType, type TaskStatus } from './task-manager.ts';
-import { toolRunner } from './tool-runner.ts';
 import { orgManager } from './org.ts';
-import type { ChannelConfig } from './org.ts';
 import { logger } from '../logger';
+import type { LLMClient } from './llm-client';
+import type { ToolRegistry } from './tool-registry';
 
 export interface RoleConfig {
   id: string;
@@ -38,105 +34,19 @@ export interface SkillConfig {
   content: string;
 }
 
+export interface ChannelConfig {
+  name: string;
+  purpose: string;
+}
+
 export interface AgentContext {
   role: RoleConfig;
   skills: SkillConfig[];
   agentId: string;
   channels?: ChannelConfig[];
+  llm: LLMClient;
+  tools: ToolRegistry;
 }
-
-// Tools available to every agent
-const AGENT_TOOLS: Tool[] = [
-  createTool('post_message', 'Post a message to a channel', {
-    type: 'object',
-    properties: {
-      channel: { type: 'string', description: 'The channel name to post to' },
-      content: { type: 'string', description: 'The message content' },
-      threadId: { type: 'string', description: 'When replying, set to the MessageId of the message you are replying to so the conversation stays threaded' },
-    },
-    required: ['channel', 'content'],
-  }),
-  createTool('pull_work', 'Pull and claim the next available work item from a queue', {
-    type: 'object',
-    properties: {
-      queue: { type: 'string', description: 'The queue name to pull from' },
-    },
-    required: ['queue'],
-  }),
-  createTool('complete_work', 'Mark a work item as complete and remove it from the queue', {
-    type: 'object',
-    properties: {
-      workItemId: { type: 'string', description: 'The work item id to complete' },
-      queue: { type: 'string', description: 'The queue the work item belongs to' },
-    },
-    required: ['workItemId', 'queue'],
-  }),
-  createTool('create_task', 'Create a new task in the task manager', {
-    type: 'object',
-    properties: {
-      parentId: { type: 'string', description: 'Optional parent task id' },
-      type: { type: 'string', enum: ['directive', 'epic', 'story', 'task'], description: 'The task type' },
-      title: { type: 'string', description: 'Short title for the task' },
-      description: { type: 'string', description: 'Detailed task description' },
-      assignee: { type: 'string', description: 'Optional agent id to assign to' },
-    },
-    required: ['type', 'title', 'description'],
-  }),
-  createTool('update_task', 'Update the status or details of a task', {
-    type: 'object',
-    properties: {
-      id: { type: 'string', description: 'The task id to update' },
-      status: { type: 'string', enum: ['queued', 'in_progress', 'review', 'done', 'blocked'], description: 'New status' },
-      assignee: { type: 'string', description: 'Reassign the task to this agent id' },
-      title: { type: 'string', description: 'Update the task title' },
-      description: { type: 'string', description: 'Update the task description' },
-    },
-    required: ['id'],
-  }),
-  createTool('execute_tool', "Execute a CLI tool associated with one of the agent's skills", {
-    type: 'object',
-    properties: {
-      skill: { type: 'string', description: 'The skill id whose tool to run' },
-      args: { type: 'array', items: { type: 'string' }, description: 'Arguments to pass to the tool' },
-      cwd: { type: 'string', description: 'Optional working directory' },
-    },
-    required: ['skill', 'args'],
-  }),
-  createTool('create_work_item', 'Push a new work item onto a queue', {
-    type: 'object',
-    properties: {
-      queue: { type: 'string', description: 'Queue name' },
-      taskId: { type: 'string', description: 'Related task id' },
-      title: { type: 'string', description: 'Work item title' },
-      description: { type: 'string', description: 'Work item description' },
-      priority: { type: 'number', description: 'Priority (lower = higher priority)' },
-      metadata: { type: 'object', description: 'Optional extra metadata' },
-    },
-    required: ['queue', 'taskId', 'title', 'description', 'priority'],
-  }),
-  createTool('store_memory', 'Store a key-value pair in your persistent memory', {
-    type: 'object',
-    properties: {
-      key: { type: 'string', description: 'Memory key' },
-      value: { type: 'string', description: 'Memory value' },
-    },
-    required: ['key', 'value'],
-  }),
-  createTool('recall_memory', 'Recall a value from your persistent memory by key', {
-    type: 'object',
-    properties: {
-      key: { type: 'string', description: 'Memory key to recall' },
-    },
-    required: ['key'],
-  }),
-  createTool('search_knowledge', 'Search the shared knowledge base', {
-    type: 'object',
-    properties: {
-      query: { type: 'string', description: 'Search query' },
-    },
-    required: ['query'],
-  }),
-];
 
 export class Agent {
   readonly id: string;
@@ -149,10 +59,11 @@ export class Agent {
   private running: boolean;
   private processing: boolean;
   private messageQueue: ChannelMessage[];
-  private memory: Map<string, string>;
   private log: ReturnType<typeof logger.child>;
   private _systemPrompt: string | null = null;
   private channels: ChannelConfig[];
+  private llm: LLMClient;
+  private tools: ToolRegistry;
 
   constructor(context: AgentContext) {
     this.id = context.agentId;
@@ -163,8 +74,9 @@ export class Agent {
     this.running = false;
     this.processing = false;
     this.messageQueue = [];
-    this.memory = new Map();
     this.log = logger.child({ agentId: this.id });
+    this.llm = context.llm;
+    this.tools = context.tools;
   }
 
   private buildSystemPrompt(): string {
@@ -335,8 +247,8 @@ export class Agent {
     while (iterations < MAX_ITERATIONS) {
       iterations++;
 
-      const response = await chat(loopMessages, {
-        tools: AGENT_TOOLS,
+      const response = await this.llm.chat(loopMessages, {
+        tools: this.tools.toolDefinitions(),
         model: modelId,
         provider,
       });
@@ -383,105 +295,9 @@ export class Agent {
     return finalResponse;
   }
 
-  private async executeSingleTool(
-    name: string,
-    args: Record<string, any>
-  ): Promise<string> {
+  private async executeSingleTool(name: string, args: Record<string, any>): Promise<string> {
     this.log.info({ tool: name }, 'Executing tool');
-
-    switch (name) {
-      case 'post_message': {
-        const { channel, content, threadId } = args;
-        channelManager.post(channel, this.id, content, threadId);
-        return `Message posted to #${channel}`;
-      }
-
-      case 'pull_work': {
-        const { queue } = args;
-        const wq = workQueueManager.get(queue);
-        if (!wq) return `Queue "${queue}" not found`;
-        const item = wq.pull(this.id);
-        if (!item) return `No available work items in queue "${queue}"`;
-        return JSON.stringify(item);
-      }
-
-      case 'complete_work': {
-        const { workItemId, queue } = args;
-        const wq = workQueueManager.get(queue);
-        if (!wq) return `Queue "${queue}" not found`;
-        wq.complete(workItemId);
-        return `Work item ${workItemId} marked complete`;
-      }
-
-      case 'create_task': {
-        const { parentId, type, title, description, assignee } = args;
-        const task = (await getTaskManager()).create({
-          parentId,
-          type: type as TaskType,
-          title,
-          description,
-          status: 'queued',
-          assignee,
-        });
-        return JSON.stringify(task);
-      }
-
-      case 'update_task': {
-        const { id, status, assignee, title, description } = args;
-        const updated = (await getTaskManager()).update(id, {
-          ...(status && { status }),
-          ...(assignee && { assignee }),
-          ...(title && { title }),
-          ...(description && { description }),
-        });
-        return JSON.stringify(updated);
-      }
-
-      case 'execute_tool': {
-        const { skill, args: toolArgs, cwd } = args;
-        const skillConfig = this.skills.find(s => s.id === skill);
-        if (!skillConfig) return `Skill "${skill}" not found for this agent`;
-        const result = await toolRunner.execute({
-          tool: skillConfig.tool,
-          args: toolArgs,
-          cwd,
-        });
-        return JSON.stringify({
-          exitCode: result.exitCode,
-          stdout: result.stdout.slice(0, 4000),
-          stderr: result.stderr.slice(0, 1000),
-        });
-      }
-
-      case 'create_work_item': {
-        const { queue, taskId, title, description, priority, metadata } = args;
-        let wq = workQueueManager.get(queue);
-        if (!wq) wq = workQueueManager.create(queue);
-        const item = wq.push({ taskId, title, description, priority, metadata });
-        return JSON.stringify(item);
-      }
-
-      case 'store_memory': {
-        const { key, value } = args;
-        this.memory.set(key, value);
-        return `Stored memory: ${key}`;
-      }
-
-      case 'recall_memory': {
-        const { key } = args;
-        const value = this.memory.get(key);
-        return value !== undefined ? value : `No memory found for key: ${key}`;
-      }
-
-      case 'search_knowledge': {
-        const { query } = args;
-        // Knowledge base not yet implemented — return empty results
-        return JSON.stringify({ results: [], query, message: 'Knowledge base not yet populated' });
-      }
-
-      default:
-        return `Unknown tool: ${name}`;
-    }
+    return this.tools.execute(name, args);
   }
 }
 

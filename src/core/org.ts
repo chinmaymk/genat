@@ -2,9 +2,11 @@ import matter from 'gray-matter';
 import { Agent, type RoleConfig, type SkillConfig } from './agent.ts';
 import { channelManager, type ChannelMessage } from './channel.ts';
 import { isRelevant } from './message-relevance.ts';
-import { workQueueManager } from './work-queue.ts';
 import { logger } from '../logger';
 import type { OrgStore } from './org-store.ts';
+import { LLMClient } from './llm-client';
+import { ToolRegistry } from './tool-registry';
+import { ToolRunner } from './tool-runner';
 
 export interface OrgMember {
   id: string;
@@ -68,6 +70,8 @@ export class OrgManager {
   /** channel id -> config (primary_handler_role). From channels.md. */
   private channelConfigs: Map<string, { primary_handler_role?: string }> = new Map();
   private channels: ChannelConfig[] = [];
+  private llm: LLMClient = new LLMClient();
+  private toolRunner: ToolRunner = new ToolRunner();
 
   constructor() {
     this.members = new Map();
@@ -162,13 +166,59 @@ export class OrgManager {
     return skills;
   }
 
+  private buildToolRegistry(agentId: string, skills: SkillConfig[]): ToolRegistry {
+    const channelMgr = channelManager;
+    const runner = this.toolRunner;
+    return new ToolRegistry()
+      .register({
+        name: 'post_message',
+        description: 'Post a message to a channel',
+        schema: {
+          type: 'object',
+          properties: {
+            channel: { type: 'string', description: 'The channel name to post to' },
+            content: { type: 'string', description: 'The message content' },
+            threadId: { type: 'string', description: 'MessageId to reply in thread' },
+          },
+          required: ['channel', 'content'],
+        },
+        handler: async ({ channel, content, threadId }) => {
+          channelMgr.post(channel, agentId, content, threadId);
+          return `Message posted to #${channel}`;
+        },
+      })
+      .register({
+        name: 'execute_tool',
+        description: "Execute a CLI tool associated with one of the agent's skills",
+        schema: {
+          type: 'object',
+          properties: {
+            skill: { type: 'string', description: 'The skill id whose tool to run' },
+            args: { type: 'array', items: { type: 'string' }, description: 'Arguments' },
+            cwd: { type: 'string', description: 'Optional working directory' },
+          },
+          required: ['skill', 'args'],
+        },
+        handler: async ({ skill, args, cwd }) => {
+          const skillConfig = skills.find((s) => s.id === skill);
+          if (!skillConfig) return `Skill "${skill}" not found`;
+          const result = await runner.execute({ tool: skillConfig.tool, args, cwd });
+          return JSON.stringify({
+            exitCode: result.exitCode,
+            stdout: result.stdout.slice(0, 4000),
+            stderr: result.stderr.slice(0, 1000),
+          });
+        },
+      });
+  }
+
   async boot(): Promise<void> {
     for (const member of this.members.values()) {
       try {
         const role = await this.loadRole(member.role);
         const skills = await this.loadSkillsForRole(role, member.id);
-
-        const agent = new Agent({ agentId: member.id, role, skills, channels: this.channels });
+        const toolRegistry = this.buildToolRegistry(member.id, skills);
+        const agent = new Agent({ agentId: member.id, role, skills, channels: this.channels, llm: this.llm, tools: toolRegistry });
 
         this.agents.set(member.id, agent);
       } catch (err) {
@@ -215,18 +265,9 @@ export class OrgManager {
       channelManager.create(name);
     }
 
-    const queues = new Set<string>();
-    for (const member of this.members.values()) {
-      queues.add(member.role);
-    }
-    queues.add('engineering');
-    for (const queueName of queues) {
-      workQueueManager.create(queueName);
-    }
-
     logger.info(
-      { channels: channelManager.list(), queues: workQueueManager.list() },
-      'Channels and queues set up'
+      { channels: channelManager.list() },
+      'Channels set up'
     );
   }
 
@@ -286,7 +327,8 @@ export class OrgManager {
       try {
         const role = await this.loadRole(member.role);
         const skills = await this.loadSkillsForRole(role, id);
-        const agent = new Agent({ agentId: id, role, skills, channels: this.channels });
+        const toolRegistry = this.buildToolRegistry(id, skills);
+        const agent = new Agent({ agentId: id, role, skills, channels: this.channels, llm: this.llm, tools: toolRegistry });
         this.agents.set(id, agent);
         await agent.start();
       } catch (err) {

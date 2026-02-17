@@ -77,10 +77,6 @@ export class OrgLoader {
       skills: Array.isArray(fm.skills) ? fm.skills : [],
       model: fm.model ?? { provider: 'anthropic' },
       systemPrompt: body,
-      handles_sources: fm.handles_sources,
-      handles_channels: fm.handles_channels,
-      receives_from_direct_reports:
-        fm.receives_from_direct_reports ?? (level === 'director' || level === 'executive'),
       channels: fm.channels,
     };
 

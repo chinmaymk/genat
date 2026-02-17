@@ -16,12 +16,6 @@ export interface RoleConfig {
   skills: string[];
   model: { provider: string; pinned?: string };
   systemPrompt: string;
-  /** Message.from values this role handles (e.g. ["board"]). Only this role receives those messages. */
-  handles_sources?: string[];
-  /** Channels this role exclusively handles (e.g. ["company"]). Only this role receives in those channels. */
-  handles_channels?: string[];
-  /** If true, messages from direct reports are relevant. Default: true when level is director | executive. */
-  receives_from_direct_reports?: boolean;
   /** Channel ids this role subscribes to (e.g. ["general", "engineering"]). If absent, subscribes to all. */
   channels?: string[];
 }

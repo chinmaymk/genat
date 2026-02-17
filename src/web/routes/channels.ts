@@ -11,7 +11,6 @@ export function createChannelsRoutes(channels: ChannelManager) {
       const ch = channels.get(name)!;
       return {
         name,
-        subscribers: Array.from(ch.subscribers),
         messageCount: ch.messages.length,
         latestMessage: ch.messages.at(-1) ?? null,
       };
@@ -30,17 +29,10 @@ export function createChannelsRoutes(channels: ChannelManager) {
     const limitParam = c.req.query('limit');
     const limit = limitParam ? parseInt(limitParam, 10) : undefined;
     const messages = channel.history(limit);
-    const triagedBy: Record<string, string> = {};
-    for (const msg of messages) {
-      const agent = msg.claimedBy;
-      if (agent) triagedBy[msg.id] = agent;
-    }
 
     return c.json({
       name: channel.name,
-      subscribers: Array.from(channel.subscribers),
       messages,
-      triagedBy,
     });
   });
 

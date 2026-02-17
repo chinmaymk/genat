@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { createDirectivesRoutes } from './directives';
 import { createChannelsRoutes } from './channels';
 import { createOrgRoutes } from './org';
+import { createMemoriesRoutes } from './memories';
 import type { ChannelManager } from '../../core/channel';
 import type { Org } from '../../core/org';
 
@@ -15,5 +16,6 @@ export function createRoutes(ctx: RouteContext) {
   api.route('/directives', createDirectivesRoutes(ctx.channels));
   api.route('/channels', createChannelsRoutes(ctx.channels));
   api.route('/org', createOrgRoutes(ctx.org));
+  api.route('/memories', createMemoriesRoutes(ctx.org));
   return api;
 }

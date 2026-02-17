@@ -7,6 +7,7 @@ import { ToolRunner } from './tool-runner';
 import { OrgLoader, type OrgMember, type ChannelConfig } from './org-loader';
 import { TeamMemory } from './team-memory';
 import { join } from 'path';
+import { readdir } from 'fs/promises';
 
 export type { OrgMember, ChannelConfig };
 
@@ -262,4 +263,28 @@ export class Org {
     return Array.from(this.members.values()).filter((m) => m.reportsTo === managerId);
   }
 
+  /** Team names from org config plus any team that has a memory DB on disk (e.g. executive). */
+  async listTeamNames(): Promise<string[]> {
+    const fromStore = await this.loader.getStore().listTeamNames();
+    const fromDisk = await this.listTeamNamesFromDisk();
+    const combined = [...new Set([...fromStore, ...fromDisk])];
+    return combined.sort();
+  }
+
+  private async listTeamNamesFromDisk(): Promise<string[]> {
+    const teamsDir = join(this.agentOrgDir, 'teams');
+    try {
+      const entries = await readdir(teamsDir, { withFileTypes: true });
+      const names = entries
+        .filter((e) => e.isDirectory() && /^[a-zA-Z0-9_-]+$/.test(e.name))
+        .map((e) => e.name);
+      return names;
+    } catch {
+      return [];
+    }
+  }
+
+  getTeamMemory(teamName: string): TeamMemory {
+    return this.getOrCreateTeamMemory(teamName);
+  }
 }

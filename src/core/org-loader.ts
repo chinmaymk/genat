@@ -2,13 +2,9 @@ import type { OrgStore } from './org-store';
 import type { RoleConfig, SkillConfig } from './agent';
 import { logger } from '../logger';
 import { parseFrontMatter } from './frontmatter';
+import type { OrgMember } from '../shared/types';
 
-export interface OrgMember {
-  id: string;
-  role: string;
-  reportsTo: string;
-}
-
+export type { OrgMember };
 export interface ChannelConfig {
   name: string;
   purpose: string;

@@ -4,11 +4,13 @@ import type { View } from './types';
 import { DashboardView } from './views/Dashboard';
 import { ChannelsView } from './views/Channels';
 import { OrgView } from './views/Org';
+import { MemoriesView } from './views/Memories';
 
 const NAV_ITEMS: { id: View; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '⬛' },
   { id: 'channels', label: 'Channels', icon: '💬' },
   { id: 'org', label: 'Org Chart', icon: '🏢' },
+  { id: 'memories', label: 'Memories', icon: '🧠' },
 ];
 
 export function App() {
@@ -79,6 +81,7 @@ export function App() {
           {view === 'dashboard' && <DashboardView />}
           {view === 'channels' && <ChannelsView />}
           {view === 'org' && <OrgView />}
+          {view === 'memories' && <MemoriesView />}
         </main>
       </div>
     </div>

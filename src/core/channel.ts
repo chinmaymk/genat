@@ -1,16 +1,7 @@
 import { logger } from '../logger';
+import type { ChannelMessage } from '../shared/types';
 
-export interface ChannelMessage {
-  id: string;
-  channel: string;
-  from: string;
-  content: string;
-  timestamp: number;
-  threadId?: string;  // root message id this replies to
-  status: 'pending' | 'claimed' | 'done';
-  claimedBy?: string;
-}
-
+export type { ChannelMessage };
 export class Channel {
   name: string;
   messages: ChannelMessage[];
@@ -100,5 +91,10 @@ export class ChannelManager {
 
 /** Strip leading # so "#engineering" and "engineering" both resolve to "engineering". */
 export function normalizeChannelName(name: string): string {
-  return name.startsWith('#') ? name.slice(1) : name;
+  if (name == null || typeof name !== 'string') {
+    throw new Error('Channel name is required and must be a string');
+  }
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error('Channel name cannot be empty');
+  return trimmed.startsWith('#') ? trimmed.slice(1) : trimmed;
 }

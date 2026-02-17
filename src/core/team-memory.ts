@@ -3,22 +3,16 @@ import type { Statement } from 'bun:sqlite';
 import { mkdirSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import type { Memory } from '../shared/types';
 
-export interface Memory {
-  id: string;
-  agentId: string;
-  type: string;
-  content: string;
-  tags: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
+export type { Memory };
 export class TeamMemory {
   private db: Database;
   private stmtInsert: Statement;
   private stmtRecent: Statement;
   private stmtDelete: Statement;
+  private stmtGet: Statement;
+  private stmtUpdate: Statement;
 
   constructor(sqlitePath: string) {
     mkdirSync(join(sqlitePath, '..'), { recursive: true });
@@ -34,6 +28,14 @@ export class TeamMemory {
        FROM memories ORDER BY created_at DESC, rowid DESC LIMIT ?`
     );
     this.stmtDelete = this.db.prepare(`DELETE FROM memories WHERE id = ?`);
+    this.stmtGet = this.db.prepare(
+      `SELECT id, agent_id as agentId, type, content, tags,
+              created_at as createdAt, updated_at as updatedAt
+       FROM memories WHERE id = ?`
+    );
+    this.stmtUpdate = this.db.prepare(
+      `UPDATE memories SET type = ?, content = ?, tags = ?, updated_at = ? WHERE id = ?`
+    );
   }
 
   private migrate(): void {
@@ -81,6 +83,22 @@ export class TeamMemory {
     return id;
   }
 
+  get(id: string): Memory | null {
+    const row = this.stmtGet.get(id) as Memory | undefined;
+    return row ?? null;
+  }
+
+  update(id: string, payload: { type?: string; content?: string; tags?: string }): boolean {
+    const existing = this.get(id);
+    if (!existing) return false;
+    const type = payload.type ?? existing.type;
+    const content = payload.content ?? existing.content;
+    const tags = payload.tags ?? existing.tags;
+    const updatedAt = Date.now();
+    this.stmtUpdate.run(type, content, tags, updatedAt, id);
+    return true;
+  }
+
   search(query: string, opts: { type?: string; limit?: number } = {}): Memory[] {
     const limit = opts.limit ?? 10;
     if (opts.type) {
@@ -109,6 +127,11 @@ export class TeamMemory {
 
   delete(id: string): void {
     this.stmtDelete.run(id);
+  }
+
+  deleteAll(): number {
+    const result = this.db.prepare('DELETE FROM memories').run();
+    return result.changes;
   }
 
   close(): void {

@@ -60,4 +60,35 @@ describe('TeamMemory', () => {
     const mem = new TeamMemory(dbPath);
     expect(mem.recent(1)).toEqual([]);
   });
+
+  test('get returns memory by id', () => {
+    const mem = new TeamMemory(dbPath);
+    const id = mem.save('swe-1', 'decision', 'Use Postgres for persistence', 'db');
+    const m = mem.get(id);
+    expect(m).not.toBeNull();
+    expect(m!.id).toBe(id);
+    expect(m!.type).toBe('decision');
+    expect(m!.content).toBe('Use Postgres for persistence');
+    expect(mem.get('no-such-id')).toBeNull();
+  });
+
+  test('update modifies memory', () => {
+    const mem = new TeamMemory(dbPath);
+    const id = mem.save('swe-1', 'lesson', 'Original content', 'old');
+    expect(mem.update(id, { content: 'Updated content', tags: 'new' })).toBe(true);
+    const m = mem.get(id)!;
+    expect(m.content).toBe('Updated content');
+    expect(m.tags).toBe('new');
+    expect(m.type).toBe('lesson');
+    expect(mem.update('no-such-id', { content: 'x' })).toBe(false);
+  });
+
+  test('deleteAll removes all memories', () => {
+    const mem = new TeamMemory(dbPath);
+    mem.save('swe-1', 'fact', 'one', '');
+    mem.save('swe-1', 'fact', 'two', '');
+    const count = mem.deleteAll();
+    expect(count).toBeGreaterThanOrEqual(1);
+    expect(mem.recent(10)).toHaveLength(0);
+  });
 });

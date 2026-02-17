@@ -13,6 +13,7 @@ export function createChannelsRoutes(channels: ChannelManager) {
         name,
         messageCount: ch.messages.length,
         latestMessage: ch.messages.at(-1) ?? null,
+        subscribers: [] as string[], // Channel model does not track subscribers yet
       };
     });
     return c.json({ channels: channelList });
@@ -30,9 +31,16 @@ export function createChannelsRoutes(channels: ChannelManager) {
     const limit = limitParam ? parseInt(limitParam, 10) : undefined;
     const messages = channel.history(limit);
 
+    const triagedBy: Record<string, string> = {};
+    for (const m of messages) {
+      if (m.claimedBy) triagedBy[m.id] = m.claimedBy;
+    }
+
     return c.json({
       name: channel.name,
       messages,
+      subscribers: [] as string[],
+      triagedBy,
     });
   });
 

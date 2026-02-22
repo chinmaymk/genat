@@ -4,14 +4,17 @@ import { rmSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
 const tmpDir = join(process.cwd(), 'tmp-test-memory');
-const dbPath = join(tmpDir, 'memory.sqlite');
+
+function uniqueDbPath(): string {
+  return join(tmpDir, `memory-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.sqlite`);
+}
 
 beforeEach(() => { mkdirSync(tmpDir, { recursive: true }); });
 afterEach(() => { rmSync(tmpDir, { recursive: true, force: true }); });
 
 describe('TeamMemory', () => {
   test('saves and retrieves a memory', () => {
-    const mem = new TeamMemory(dbPath);
+    const mem = new TeamMemory(uniqueDbPath());
     const id = mem.save('swe-1', 'lesson', 'GitHub rate limit is 5000/hr', 'api,github');
     expect(id).toBeTruthy();
     const recent = mem.recent(10);
@@ -23,7 +26,7 @@ describe('TeamMemory', () => {
   });
 
   test('search returns FTS5 matches', () => {
-    const mem = new TeamMemory(dbPath);
+    const mem = new TeamMemory(uniqueDbPath());
     mem.save('swe-1', 'lesson', 'GitHub rate limit is 5000/hr', 'api,github');
     mem.save('swe-1', 'fact', 'Fly.io requires --ha for multi-region', 'infra,fly');
     const results = mem.search('rate limit');
@@ -32,7 +35,7 @@ describe('TeamMemory', () => {
   });
 
   test('search filters by type', () => {
-    const mem = new TeamMemory(dbPath);
+    const mem = new TeamMemory(uniqueDbPath());
     mem.save('swe-1', 'lesson', 'always use feature branches', 'git');
     mem.save('swe-1', 'decision', 'use feature branches not trunk', 'git');
     const decisions = mem.search('feature branches', { type: 'decision' });
@@ -41,7 +44,7 @@ describe('TeamMemory', () => {
   });
 
   test('recent returns newest first', () => {
-    const mem = new TeamMemory(dbPath);
+    const mem = new TeamMemory(uniqueDbPath());
     mem.save('swe-1', 'fact', 'first', '');
     mem.save('swe-1', 'fact', 'second', '');
     const recent = mem.recent(2);
@@ -50,19 +53,19 @@ describe('TeamMemory', () => {
   });
 
   test('delete removes a memory', () => {
-    const mem = new TeamMemory(dbPath);
+    const mem = new TeamMemory(uniqueDbPath());
     const id = mem.save('swe-1', 'fact', 'to delete', '');
     mem.delete(id);
     expect(mem.recent(10)).toHaveLength(0);
   });
 
   test('returns empty array for fresh database', () => {
-    const mem = new TeamMemory(dbPath);
+    const mem = new TeamMemory(uniqueDbPath());
     expect(mem.recent(1)).toEqual([]);
   });
 
   test('get returns memory by id', () => {
-    const mem = new TeamMemory(dbPath);
+    const mem = new TeamMemory(uniqueDbPath());
     const id = mem.save('swe-1', 'decision', 'Use Postgres for persistence', 'db');
     const m = mem.get(id);
     expect(m).not.toBeNull();
@@ -73,7 +76,7 @@ describe('TeamMemory', () => {
   });
 
   test('update modifies memory', () => {
-    const mem = new TeamMemory(dbPath);
+    const mem = new TeamMemory(uniqueDbPath());
     const id = mem.save('swe-1', 'lesson', 'Original content', 'old');
     expect(mem.update(id, { content: 'Updated content', tags: 'new' })).toBe(true);
     const m = mem.get(id)!;
@@ -84,7 +87,7 @@ describe('TeamMemory', () => {
   });
 
   test('deleteAll removes all memories', () => {
-    const mem = new TeamMemory(dbPath);
+    const mem = new TeamMemory(uniqueDbPath());
     mem.save('swe-1', 'fact', 'one', '');
     mem.save('swe-1', 'fact', 'two', '');
     const count = mem.deleteAll();

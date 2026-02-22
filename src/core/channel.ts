@@ -11,14 +11,25 @@ export class Channel {
     this.messages = [];
   }
 
-  post(from: string, content: string, threadId?: string): ChannelMessage {
+  /**
+   * Post a message. By default, root messages (no threadId) are pending and create work;
+   * replies (with threadId) are done and do not. Use requireAction to override.
+   */
+  post(
+    from: string,
+    content: string,
+    threadId?: string,
+    requireAction?: boolean
+  ): ChannelMessage {
+    const defaultRequireAction = threadId === undefined;
+    const pending = requireAction ?? defaultRequireAction;
     const msg: ChannelMessage = {
       id: crypto.randomUUID(),
       channel: this.name,
       from,
       content,
       timestamp: Date.now(),
-      status: 'pending',
+      status: pending ? 'pending' : 'done',
     };
     if (threadId) msg.threadId = threadId;
     this.messages.push(msg);
@@ -77,11 +88,17 @@ export class ChannelManager {
     return this.channels.get(normalizeChannelName(name));
   }
 
-  post(channelName: string, from: string, content: string, threadId?: string): ChannelMessage {
+  post(
+    channelName: string,
+    from: string,
+    content: string,
+    threadId?: string,
+    requireAction?: boolean
+  ): ChannelMessage {
     const key = normalizeChannelName(channelName);
     const channel = this.channels.get(key);
     if (!channel) throw new Error(`Channel "${channelName}" does not exist`);
-    return channel.post(from, content, threadId);
+    return channel.post(from, content, threadId, requireAction);
   }
 
   list(): string[] {

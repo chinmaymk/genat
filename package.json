@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "bun run src/index.ts",
     "test": "bun test",
     "dist": "bun run scripts/build.ts",
     "build:ui": "bun build src/web/ui/index.tsx --outdir dist/ui --target browser"

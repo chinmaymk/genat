@@ -98,14 +98,14 @@ export class Agent {
       `You report to: ${this.role.reportsTo}`,
       '',
       '## Instructions',
-      'Use the available tools to communicate, manage work, and get things done.',
-      'Think step by step. After completing tool calls, assess if further action is needed.',
+      'Think step by step. Use tools to get work done and to reach out for help.',
       '',
       '## Message Handling Rules',
       '- You receive messages from channels you monitor.',
       '- You see the full thread context — respond to the most recent message.',
-      `- When replying, use post_message with threadId set to the root message id to keep replies in-thread.`,
-      '- If a message does not require action from you, respond with just the text "NO_ACTION" and nothing else.',
+      '- Write your reply as plain text. The framework automatically posts it to the current thread — you never need to call post_message for in-thread replies.',
+      '- If this message requires no response from you, reply with exactly "NO_ACTION".',
+      '- Use the post_message tool only to contact agents in other channels (to ask for help, delegate work, etc.).',
     );
 
     this._systemPrompt = parts.join('\n');
@@ -178,7 +178,7 @@ export class Agent {
       ? `## Recent Team Memory\n${recent.map(m => `[${m.type}][${m.agentId}] ${m.content}`).join('\n')}\n\n`
       : '';
 
-    const input = `${memoryPrefix}[Channel: #${msg.channel}]\n${threadText}`;
+    const input = `${memoryPrefix}[Channel: #${msg.channel}] [Thread ID: ${rootId}]\n${threadText}`;
 
     // Each message is handled with a fresh conversation; thread context is already in input
     this.conversationHistory = [];

@@ -37,7 +37,7 @@ export class Org {
     agentId: string,
     skills: SkillConfig[],
     teamMemory: TeamMemory,
-    level: string
+    _level: string
   ): ToolContext {
     return {
       agentId,
@@ -45,12 +45,24 @@ export class Org {
       toolRunner: this.toolRunner,
       skills,
       teamMemory,
-      level,
-      getExecutiveMemory:
-        level === 'director' || level === 'executive'
-          ? () => this.getOrCreateTeamMemory('executive')
-          : undefined,
+      level: _level,
+      getDirectReportMemories: () => this.getDirectReportTeamMemories(agentId),
     };
+  }
+
+  /** Team memories for each team that reports to this agent (deduped by team). */
+  async getDirectReportTeamMemories(agentId: string): Promise<TeamMemory[]> {
+    const teams = await this.loader.loadTeams();
+    const reports = this.getDirectReports(agentId);
+    const seen = new Set<string>();
+    const mems: TeamMemory[] = [];
+    for (const m of reports) {
+      const teamName = this.loader.resolveTeam(m.role, teams);
+      if (seen.has(teamName)) continue;
+      seen.add(teamName);
+      mems.push(this.getOrCreateTeamMemory(teamName));
+    }
+    return mems;
   }
 
   private async spawnAgent(id: string, member: OrgMember, teamMemory: TeamMemory): Promise<Agent> {

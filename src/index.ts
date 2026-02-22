@@ -1,4 +1,4 @@
-import { getPathConfig, ensureWritableDirs, requireDefaultOrg } from './config/paths';
+import { getPathConfig, ensureWritableDirs, requireDefaultOrg } from './core/paths';
 import { initLogger } from './logger';
 import { logger } from './logger';
 import { createLayeredFs } from './core/layered-fs';

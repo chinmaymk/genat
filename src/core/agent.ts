@@ -1,10 +1,11 @@
 import type { Context, Message, AssistantMessage } from '@mariozechner/pi-ai';
-import { Channel, ChannelManager, normalizeChannelName, type ChannelMessage } from './channel.ts';
+import { ChannelManager, normalizeChannelName, type ChannelMessage } from './channel.ts';
 import { logger } from '../logger';
 import type { ILLMClient } from './llm-client';
 import type { ToolRegistry } from './tool-registry';
 import type { ChannelConfig } from './org-loader';
 import type { TeamMemory } from './team-memory';
+import { Mailbox } from './mailbox';
 
 export interface RoleConfig {
   id: string;
@@ -12,7 +13,7 @@ export interface RoleConfig {
   level: string;
   reportsTo: string;
   skills: string[];
-  /** Tool names this role can use. If absent, all tools are available (backwards-compat). */
+  /** Tool names this role can use. If absent, no tools are available. */
   tools?: string[];
   model: { provider: string; pinned?: string };
   systemPrompt: string;
@@ -26,6 +27,16 @@ export interface SkillConfig {
   tool: string;
   content: string;
 }
+
+export interface DmPayload {
+  from: string;
+  content: string;
+  correlationId?: string;
+}
+
+type MailboxPayload =
+  | { kind: 'channel'; msg: ChannelMessage }
+  | { kind: 'dm'; dm: DmPayload };
 
 export interface AgentContext {
   role: RoleConfig;
@@ -54,6 +65,13 @@ export class Agent {
   private tools: ToolRegistry;
   private channelMgr: ChannelManager;
   private teamMemory: TeamMemory;
+  private mailbox = new Mailbox<MailboxPayload>();
+  /** Pending reply resolvers for the ask/reply pattern. Keyed by correlationId. */
+  readonly pendingReplies = new Map<string, (reply: string) => void>();
+  /** Set by Org to deliver DMs from this agent to another agent's mailbox. */
+  _dmSender?: (targetAgentId: string, content: string, correlationId?: string) => void;
+  /** Set per DM handling turn so the reply tool knows who to reply to. */
+  _activeDmFrom?: string;
 
   constructor(context: AgentContext) {
     this.id = context.agentId;
@@ -104,10 +122,11 @@ export class Agent {
       'Think step by step. After completing tool calls, assess if further action is needed.',
       '',
       '## Message Handling Rules',
-      '- You receive messages from channels you monitor.',
-      '- You see the full thread context — respond to the most recent message.',
-      `- When replying, use post_message with threadId set to the root message id to keep replies in-thread.`,
+      '- You receive messages from channels you monitor and direct messages (DMs) from other agents.',
+      '- For channel messages, you see the full thread context — respond to the most recent message.',
+      '- Use post_message to reply in a channel thread (set threadId to the root message id).',
       '- If a message does not require action from you, respond with just the text "NO_ACTION" and nothing else.',
+      '- For DMs, use the reply tool with the correlationId provided.',
     );
 
     this._systemPrompt = parts.join('\n');
@@ -123,31 +142,30 @@ export class Agent {
       ? this.role.channels.map(normalizeChannelName)
       : allChannels;
 
+    // Subscribe to each channel — push messages into mailbox
+    for (const name of channelNames) {
+      const channel = this.channelMgr.get(name);
+      if (!channel) continue;
+      channel.subscribe(this.id, (msg) => {
+        this.mailbox.enqueue({ kind: 'channel', msg }, 'channel');
+      });
+    }
+
     this.log.info({ role: this.role.title, channels: channelNames.length }, 'Agent started');
-    this.poll(channelNames);
+    this.drain();
   }
 
-  private async poll(channelNames: string[]): Promise<void> {
+  private async drain(): Promise<void> {
     while (this.running) {
-      let foundWork = false;
-      for (const name of channelNames) {
-        const channel = this.channelMgr.get(name);
-        if (!channel) continue;
-        const msg = channel.nextPending(this.id);
-        if (msg) {
-          channel.claim(msg.id, this.id);
-          try {
-            await this.handleMessage(msg, channel);
-          } catch (err) {
-            this.log.error({ err, messageId: msg.id }, 'Error handling message');
-            channel.done(msg.id);
-          }
-          foundWork = true;
-          break;
+      const item = await this.mailbox.next();
+      try {
+        if (item.value.kind === 'channel') {
+          await this.handleChannelMessage(item.value.msg);
+        } else {
+          await this.handleDm(item.value.dm);
         }
-      }
-      if (!foundWork) {
-        await Bun.sleep(1000);
+      } catch (err) {
+        this.log.error({ err }, 'Error handling mailbox item');
       }
     }
   }
@@ -168,10 +186,18 @@ export class Agent {
     this.tools = tools;
   }
 
-  async handleMessage(msg: ChannelMessage, channel: Channel): Promise<void> {
-    this.log.info({ messageId: msg.id, channel: msg.channel, from: msg.from }, 'Handling message');
+  /** Called by Org to deliver an incoming DM into this agent's mailbox. */
+  receiveDm(dm: DmPayload): void {
+    this.mailbox.enqueue({ kind: 'dm', dm }, 'dm');
+  }
+
+  private async handleChannelMessage(msg: ChannelMessage): Promise<void> {
+    this.log.info({ messageId: msg.id, channel: msg.channel, from: msg.from }, 'Handling channel message');
 
     const rootId = msg.threadId ?? msg.id;
+    const channel = this.channelMgr.get(msg.channel);
+    if (!channel) return;
+
     const thread = channel.getThread(rootId);
     const threadText = thread.map(m => `[${m.from}]: ${m.content}`).join('\n');
 
@@ -180,24 +206,40 @@ export class Agent {
       ? `## Recent Team Memory\n${recent.map(m => `[${m.type}][${m.agentId}] ${m.content}`).join('\n')}\n\n`
       : '';
 
-    const input = `${memoryPrefix}[Channel: #${msg.channel}]\n${threadText}`;
+    const input = `${memoryPrefix}[Channel: #${msg.channel}] [Thread ID: ${rootId}]\n${threadText}`;
 
-    // Each message is handled with a fresh conversation; thread context is already in input
     this.conversationHistory = [];
     const response = await this.think(input);
 
     if (response.trim() !== 'NO_ACTION') {
-      await this.send(msg.channel, response, rootId);
-      this.log.debug({ messageId: msg.id }, 'Response posted');
+      // Claim thread ownership before posting reply
+      channel.claimThread(rootId, this.id);
+      this.channelMgr.post(msg.channel, this.id, response, rootId);
+      this.log.debug({ messageId: msg.id }, 'Response posted to channel');
     } else {
       this.log.debug({ messageId: msg.id }, 'NO_ACTION — skipping reply');
     }
-
-    channel.done(msg.id);
   }
 
-  async send(channel: string, content: string, threadId?: string): Promise<void> {
-    this.channelMgr.post(channel, this.id, content, threadId);
+  private async handleDm(dm: DmPayload): Promise<void> {
+    // If this is a reply to our ask(), resolve the pending promise
+    if (dm.correlationId && this.pendingReplies.has(dm.correlationId)) {
+      this.log.debug({ correlationId: dm.correlationId, from: dm.from }, 'DM reply resolved');
+      this.pendingReplies.get(dm.correlationId)!(dm.content);
+      this.pendingReplies.delete(dm.correlationId);
+      return;
+    }
+
+    this.log.info({ from: dm.from, correlationId: dm.correlationId }, 'Handling DM');
+
+    // Set active DM context so the reply tool knows who to reply to
+    this._activeDmFrom = dm.from;
+
+    const input = `[Direct Message from ${dm.from}]${dm.correlationId ? ` [correlationId: ${dm.correlationId}]` : ''}\n${dm.content}`;
+    this.conversationHistory = [];
+    await this.think(input);
+
+    this._activeDmFrom = undefined;
   }
 
   private async think(input: string): Promise<string> {
@@ -208,7 +250,6 @@ export class Agent {
     };
     this.conversationHistory.push(inputMsg);
 
-    // Keep conversation history bounded to avoid huge prompts and rate limits
     if (this.conversationHistory.length > 24) {
       this.conversationHistory = this.conversationHistory.slice(-16);
     }
@@ -274,7 +315,6 @@ export class Agent {
     }
 
     this.log.info({ totalInputTokens, totalOutputTokens, iterations }, 'Think turn complete');
-
     return finalResponse;
   }
 

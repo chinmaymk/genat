@@ -2,13 +2,25 @@ import { logger } from '../logger';
 import type { ChannelMessage } from '../shared/types';
 
 export type { ChannelMessage };
+
 export class Channel {
   name: string;
-  messages: ChannelMessage[];
+  private messages: ChannelMessage[] = [];
+  private subscribers: Map<string, (msg: ChannelMessage) => void> = new Map();
+  private threadOwners: Map<string, string> = new Map(); // threadId -> agentId
+  private members: string[] | null = null; // null = open channel
 
-  constructor(name: string) {
+  constructor(name: string, members?: string[]) {
     this.name = name;
-    this.messages = [];
+    if (members) this.members = [...members];
+  }
+
+  subscribe(agentId: string, handler: (msg: ChannelMessage) => void): void {
+    this.subscribers.set(agentId, handler);
+  }
+
+  unsubscribe(agentId: string): void {
+    this.subscribers.delete(agentId);
   }
 
   /**
@@ -29,46 +41,56 @@ export class Channel {
       from,
       content,
       timestamp: Date.now(),
-      status: pending ? 'pending' : 'done',
+      status: 'done',
     };
     if (threadId) msg.threadId = threadId;
     this.messages.push(msg);
+
+    // Thread reply: only deliver to thread owner
+    if (threadId) {
+      const owner = this.threadOwners.get(threadId);
+      if (owner && owner !== from) {
+        this.subscribers.get(owner)?.(msg);
+      }
+      return msg;
+    }
+
+    // Root message: fan-out to all subscribers except sender
+    for (const [agentId, handler] of this.subscribers) {
+      if (agentId !== from) handler(msg);
+    }
     return msg;
   }
 
-  /** Root message + all replies, ordered by timestamp. */
+  claimThread(threadId: string, agentId: string): void {
+    if (!this.threadOwners.has(threadId)) {
+      this.threadOwners.set(threadId, agentId);
+    }
+  }
+
+  getThreadOwner(threadId: string): string | undefined {
+    return this.threadOwners.get(threadId);
+  }
+
   getThread(rootId: string): ChannelMessage[] {
     return this.messages
       .filter(m => m.id === rootId || m.threadId === rootId)
       .sort((a, b) => a.timestamp - b.timestamp);
   }
 
-  /** First pending message not posted by this agent. */
-  nextPending(excludeAgentId: string): ChannelMessage | null {
-    return this.messages.find(
-      m => m.status === 'pending' && m.from !== excludeAgentId
-    ) ?? null;
-  }
-
-  claim(messageId: string, agentId: string): void {
-    const msg = this.messages.find(m => m.id === messageId);
-    if (msg) {
-      msg.status = 'claimed';
-      msg.claimedBy = agentId;
-    }
-  }
-
-  done(messageId: string): void {
-    const msg = this.messages.find(m => m.id === messageId);
-    if (msg) {
-      msg.status = 'done';
-      msg.claimedBy = undefined;
-    }
-  }
-
   history(limit?: number): ChannelMessage[] {
     if (limit === undefined) return [...this.messages];
     return this.messages.slice(-limit);
+  }
+
+  getMembers(): string[] {
+    return this.members ? [...this.members] : [];
+  }
+
+  addMember(agentId: string): void {
+    if (this.members && !this.members.includes(agentId)) {
+      this.members.push(agentId);
+    }
   }
 }
 
@@ -84,21 +106,40 @@ export class ChannelManager {
     return channel;
   }
 
+  createDynamic(name: string, members: string[]): Channel {
+    const key = normalizeChannelName(name);
+    if (this.channels.has(key)) return this.channels.get(key)!;
+    const channel = new Channel(key, members);
+    this.channels.set(key, channel);
+    logger.info({ channel: name, members }, 'Dynamic channel created');
+    return channel;
+  }
+
+  invite(name: string, agentId: string): void {
+    const channel = this.get(name);
+    if (!channel) throw new Error(`Channel "${name}" does not exist`);
+    channel.addMember(agentId);
+  }
+
   get(name: string): Channel | undefined {
     return this.channels.get(normalizeChannelName(name));
   }
 
-  post(
-    channelName: string,
-    from: string,
-    content: string,
-    threadId?: string,
-    requireAction?: boolean
-  ): ChannelMessage {
+  subscribe(channelName: string, agentId: string, handler: (msg: ChannelMessage) => void): void {
+    const channel = this.get(channelName);
+    if (!channel) throw new Error(`Channel "${channelName}" does not exist`);
+    channel.subscribe(agentId, handler);
+  }
+
+  post(channelName: string, from: string, content: string, threadId?: string): ChannelMessage {
     const key = normalizeChannelName(channelName);
     const channel = this.channels.get(key);
     if (!channel) throw new Error(`Channel "${channelName}" does not exist`);
     return channel.post(from, content, threadId, requireAction);
+  }
+
+  getMembers(name: string): string[] {
+    return this.get(normalizeChannelName(name))?.getMembers() ?? [];
   }
 
   list(): string[] {

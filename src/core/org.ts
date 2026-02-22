@@ -1,4 +1,4 @@
-import { Agent, type RoleConfig, type SkillConfig } from './agent.ts';
+import { Agent, type RoleConfig, type SkillConfig, type DmPayload } from './agent.ts';
 import { ChannelManager } from './channel.ts';
 import { logger } from '../logger';
 import type { ILLMClient } from './llm-client';
@@ -6,6 +6,7 @@ import { ToolRunner } from './tool-runner';
 import { OrgLoader, type OrgMember, type ChannelConfig } from './org-loader';
 import { TeamMemory } from './team-memory';
 import { buildToolRegistry, type ToolContext } from './tools';
+import { WorkQueueManager } from './work-queue-manager';
 import { join } from 'path';
 import { readdir } from 'fs/promises';
 
@@ -16,6 +17,7 @@ export class Org {
   private agents: Map<string, Agent> = new Map();
   private channels: ChannelConfig[] = [];
   private teamMemories: Map<string, TeamMemory> = new Map();
+  private workQueueManager = new WorkQueueManager();
 
   constructor(
     private loader: OrgLoader,
@@ -33,11 +35,22 @@ export class Org {
     return this.teamMemories.get(teamName)!;
   }
 
+  /** Deliver a DM from one agent to another's mailbox. */
+  private deliverDm(targetAgentId: string, dm: DmPayload): void {
+    const target = this.agents.get(targetAgentId);
+    if (!target) {
+      logger.warn({ targetAgentId }, 'DM target agent not found');
+      return;
+    }
+    target.receiveDm(dm);
+  }
+
   private buildToolContext(
     agentId: string,
+    role: RoleConfig,
     skills: SkillConfig[],
     teamMemory: TeamMemory,
-    _level: string
+    agentRef: Agent,
   ): ToolContext {
     return {
       agentId,
@@ -45,8 +58,17 @@ export class Org {
       toolRunner: this.toolRunner,
       skills,
       teamMemory,
-      level: _level,
-      getDirectReportMemories: () => this.getDirectReportTeamMemories(agentId),
+      level: role.level,
+      allowedTools: role.tools,
+      workQueueManager: this.workQueueManager,
+      sendDm: (targetId, content, correlationId) =>
+        this.deliverDm(targetId, { from: agentId, content, correlationId }),
+      pendingReplies: agentRef.pendingReplies,
+      get _dmReplyTarget() { return agentRef._activeDmFrom; },
+      getExecutiveMemory:
+        role.level === 'director' || role.level === 'executive'
+          ? () => this.getOrCreateTeamMemory('executive')
+          : undefined,
     };
   }
 
@@ -68,15 +90,21 @@ export class Org {
   private async spawnAgent(id: string, member: OrgMember, teamMemory: TeamMemory): Promise<Agent> {
     const role = await this.loader.loadRole(member.role);
     const skills = await this.loader.loadSkillsForRole(role, id);
-    const tools = buildToolRegistry(this.buildToolContext(id, skills, teamMemory, role.level));
-    return new Agent({
+    // Create agent first so we can pass its pendingReplies to the tool context
+    const agent = new Agent({
       agentId: id, role, skills,
       channels: this.channels,
       llm: this.llm,
-      tools,
+      tools: undefined as unknown as import('./tool-registry').ToolRegistry, // replaced below
       channelManager: this.channelManager,
       teamMemory,
     });
+    const tools = buildToolRegistry(this.buildToolContext(id, role, skills, teamMemory, agent));
+    agent.updateTools(tools);
+    // Wire DM sender back onto agent
+    agent._dmSender = (targetId, content, correlationId) =>
+      this.deliverDm(targetId, { from: id, content, correlationId });
+    return agent;
   }
 
   async boot(): Promise<void> {
@@ -150,7 +178,7 @@ export class Org {
             const teamName = this.loader.resolveTeam(role.id, teams);
             const teamMemory = this.getOrCreateTeamMemory(teamName);
             const tools = buildToolRegistry(
-              this.buildToolContext(id, skills, teamMemory, role.level)
+              this.buildToolContext(id, role, skills, teamMemory, agent)
             );
             agent.updateRoleAndSkills(role, skills, this.channels);
             agent.updateTools(tools);

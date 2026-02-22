@@ -5,6 +5,15 @@ level: ic
 reports_to: cpo
 skills:
   - github-issues
+tools:
+  - pull_work
+  - post_message
+  - ask
+  - reply
+  - read_skill
+  - run_cli
+  - save_memory
+  - search_memory
 ---
 
 # UX Designer

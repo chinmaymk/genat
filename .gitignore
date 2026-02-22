@@ -7,3 +7,4 @@ logs/
 # Bun build temp files (sometimes left in cwd when running bun build)
 *.bun-build
 docs/plans
+.worktrees

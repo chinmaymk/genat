@@ -5,6 +5,15 @@ level: executive
 reports_to: ceo
 skills:
   - github-issues
+tools:
+  - push_work
+  - post_message
+  - ask
+  - reply
+  - save_memory
+  - search_memory
+  - create_channel
+  - invite_to_channel
 ---
 
 # CPO

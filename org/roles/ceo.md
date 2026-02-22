@@ -8,6 +8,15 @@ handles_channels: [company]
 channels: [general, company, engineering, product, announcements]
 skills:
   - github-issues
+tools:
+  - push_work
+  - post_message
+  - ask
+  - reply
+  - save_memory
+  - search_memory
+  - create_channel
+  - invite_to_channel
 model:
   provider: anthropic
   pinned: claude-opus-4-6

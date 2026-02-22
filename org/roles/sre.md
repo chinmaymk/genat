@@ -7,6 +7,15 @@ skills:
   - deploy-fly
   - git-worktree
   - github-issues
+tools:
+  - pull_work
+  - post_message
+  - ask
+  - reply
+  - read_skill
+  - run_cli
+  - save_memory
+  - search_memory
 ---
 
 # SRE (Site Reliability Engineer)

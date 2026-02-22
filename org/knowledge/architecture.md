@@ -117,7 +117,8 @@ All agents have access to these built-in tools:
 | `complete_work` | Mark a work item done and remove it from the queue |
 | `create_task` | Create a task in the task manager (directive/epic/story/task) |
 | `update_task` | Update task status, assignee, or details |
-| `execute_tool` | Run a CLI tool associated with one of the agent's skills |
+| `read_skill` | Get full skill documentation (what it does, what args the CLI expects); does not run anything |
+| `execute_cli` | Run the CLI command for one of the agent's skills (use read_skill first to see args) |
 | `create_work_item` | Push a new work item onto a named queue |
 
 ### Channel System (`src/core/channel.ts`)
@@ -163,7 +164,7 @@ Persisted to `data/memory.sqlite`.
 
 ### Tool Runner (`src/core/tool-runner.ts`)
 
-`ToolRunner` executes CLI commands on behalf of agents when the `execute_tool` tool is called. It spawns subprocesses (via Bun's subprocess API) with the tool name and arguments. Output is capped at 4000 chars for stdout and 1000 chars for stderr before being returned to the LLM context.
+`ToolRunner` executes CLI commands on behalf of agents when the `execute_cli` tool is called. It spawns subprocesses (via Bun's subprocess API) with the tool name and arguments. Output is capped at 4000 chars for stdout and 1000 chars for stderr before being returned to the LLM context.
 
 Skills define which CLI tool they invoke (e.g., `code-with-claude` invokes `claude`, `github-pr` invokes `gh`).
 
@@ -194,7 +195,7 @@ Board UI or external input
   -> Agent.think(input) enters the agentic loop
      -> LLM called with system prompt + conversation history
      -> LLM returns response + optional tool calls
-     -> Tool calls executed (post_message, create_task, pull_work, execute_tool, ...)
+     -> Tool calls executed (post_message, read_skill, execute_cli, save_memory, search_memory, ...)
      -> Tool results fed back to LLM
      -> Loop until no tool calls or MAX_ITERATIONS
   -> Agent may post to channels, create tasks, push work items, or invoke CLI tools

@@ -11,8 +11,8 @@ export function createChannelsRoutes(channels: ChannelManager) {
       const ch = channels.get(name)!;
       return {
         name,
-        messageCount: ch.messages.length,
-        latestMessage: ch.messages.at(-1) ?? null,
+        messageCount: ch.history().length,
+        latestMessage: ch.history().at(-1) ?? null,
         subscribers: [] as string[], // Channel model does not track subscribers yet
       };
     });

@@ -1,11 +1,12 @@
-import { Agent, type RoleConfig, type SkillConfig } from './agent.ts';
+import { Agent, type RoleConfig, type SkillConfig, type DmPayload } from './agent.ts';
 import { ChannelManager } from './channel.ts';
 import { logger } from '../logger';
 import type { ILLMClient } from './llm-client';
-import { ToolRegistry } from './tool-registry';
 import { ToolRunner } from './tool-runner';
 import { OrgLoader, type OrgMember, type ChannelConfig } from './org-loader';
 import { TeamMemory } from './team-memory';
+import { buildToolRegistry, type ToolContext } from './tools';
+import { WorkQueueManager } from './work-queue-manager';
 import { join } from 'path';
 import { readdir } from 'fs/promises';
 
@@ -16,6 +17,7 @@ export class Org {
   private agents: Map<string, Agent> = new Map();
   private channels: ChannelConfig[] = [];
   private teamMemories: Map<string, TeamMemory> = new Map();
+  private workQueueManager = new WorkQueueManager();
 
   constructor(
     private loader: OrgLoader,
@@ -33,136 +35,61 @@ export class Org {
     return this.teamMemories.get(teamName)!;
   }
 
-  private buildToolRegistry(agentId: string, skills: SkillConfig[], teamMemory: TeamMemory, level: string): ToolRegistry {
-    const cm = this.channelManager;
-    const runner = this.toolRunner;
-    return new ToolRegistry()
-      .register({
-        name: 'post_message',
-        description: 'Post a message to a channel',
-        schema: {
-          type: 'object',
-          properties: {
-            channel: { type: 'string', description: 'The channel name to post to' },
-            content: { type: 'string', description: 'The message content' },
-            threadId: { type: 'string', description: 'MessageId to reply in thread' },
-          },
-          required: ['channel', 'content'],
-        },
-        handler: async ({ channel, content, threadId }) => {
-          cm.post(channel, agentId, content, threadId);
-          return `Message posted to #${channel}`;
-        },
-      })
-      .register({
-        name: 'execute_tool',
-        description: "Execute a CLI tool associated with one of the agent's skills",
-        schema: {
-          type: 'object',
-          properties: {
-            skill: { type: 'string', description: 'The skill id whose tool to run' },
-            args: { type: 'array', items: { type: 'string' }, description: 'Arguments' },
-            cwd: { type: 'string', description: 'Optional working directory' },
-          },
-          required: ['skill', 'args'],
-        },
-        handler: async ({ skill, args, cwd }) => {
-          const skillConfig = skills.find((s) => s.id === skill);
-          if (!skillConfig) return `Skill "${skill}" not found`;
-          const result = await runner.execute({ tool: skillConfig.tool, args, cwd });
-          return JSON.stringify({
-            exitCode: result.exitCode,
-            stdout: result.stdout.slice(0, 4000),
-            stderr: result.stderr.slice(0, 1000),
-          });
-        },
-      })
-      .register({
-        name: 'save_memory',
-        description: 'Save a lesson, decision, or fact to team memory for future reference',
-        schema: {
-          type: 'object',
-          properties: {
-            type: {
-              type: 'string',
-              enum: ['decision', 'lesson', 'fact'],
-              description: 'Type of memory',
-            },
-            content: { type: 'string', description: 'The memory content' },
-            tags: {
-              type: 'string',
-              description: 'Comma-separated tags, e.g. "api,github,rate-limits"',
-            },
-          },
-          required: ['type', 'content'],
-        },
-        handler: async ({ type, content, tags }) => {
-          try {
-            if (typeof type !== 'string' || typeof content !== 'string') {
-              return 'Error: type and content must be strings';
-            }
-            const id = teamMemory.save(agentId, type, content, typeof tags === 'string' ? tags : '');
-            return `Memory saved (id: ${id})`;
-          } catch (err) {
-            return `Memory save failed: ${err instanceof Error ? err.message : String(err)}`;
-          }
-        },
-      })
-      .register({
-        name: 'search_memory',
-        description: 'Search team memory for relevant knowledge before acting',
-        schema: {
-          type: 'object',
-          properties: {
-            query: { type: 'string', description: 'Full-text search query' },
-            type: {
-              type: 'string',
-              enum: ['decision', 'lesson', 'fact'],
-              description: 'Optional: filter by memory type',
-            },
-            limit: { type: 'number', description: 'Max results (default 10)' },
-          },
-          required: ['query'],
-        },
-        handler: async ({ query, type, limit }) => {
-          try {
-            if (typeof query !== 'string') return 'Error: query must be a string';
-            const opts = {
-              type: typeof type === 'string' ? type : undefined,
-              limit: typeof limit === 'number' ? limit : 10,
-            };
-            const results = [...teamMemory.search(query, opts)];
-            if (level === 'director' || level === 'executive') {
-              const execMem = this.getOrCreateTeamMemory('executive');
-              if (execMem !== teamMemory) {
-                const execResults = execMem.search(query, opts);
-                const seen = new Set(results.map(r => r.id));
-                for (const r of execResults) {
-                  if (!seen.has(r.id)) results.push(r);
-                }
-              }
-            }
-            if (results.length === 0) return 'No matching memories found.';
-            return results.map(r => `[${r.type}][${r.agentId}] ${r.content} (tags: ${r.tags})`).join('\n');
-          } catch (err) {
-            return `Memory search failed: ${err instanceof Error ? err.message : String(err)}`;
-          }
-        },
-      });
+  /** Deliver a DM from one agent to another's mailbox. */
+  private deliverDm(targetAgentId: string, dm: DmPayload): void {
+    const target = this.agents.get(targetAgentId);
+    if (!target) {
+      logger.warn({ targetAgentId }, 'DM target agent not found');
+      return;
+    }
+    target.receiveDm(dm);
+  }
+
+  private buildToolContext(
+    agentId: string,
+    role: RoleConfig,
+    skills: SkillConfig[],
+    teamMemory: TeamMemory,
+    agentRef: Agent,
+  ): ToolContext {
+    return {
+      agentId,
+      channelManager: this.channelManager,
+      toolRunner: this.toolRunner,
+      skills,
+      teamMemory,
+      level: role.level,
+      allowedTools: role.tools,
+      workQueueManager: this.workQueueManager,
+      sendDm: (targetId, content, correlationId) =>
+        this.deliverDm(targetId, { from: agentId, content, correlationId }),
+      pendingReplies: agentRef.pendingReplies,
+      get _dmReplyTarget() { return agentRef._activeDmFrom; },
+      getExecutiveMemory:
+        role.level === 'director' || role.level === 'executive'
+          ? () => this.getOrCreateTeamMemory('executive')
+          : undefined,
+    };
   }
 
   private async spawnAgent(id: string, member: OrgMember, teamMemory: TeamMemory): Promise<Agent> {
     const role = await this.loader.loadRole(member.role);
     const skills = await this.loader.loadSkillsForRole(role, id);
-    const tools = this.buildToolRegistry(id, skills, teamMemory, role.level);
-    return new Agent({
+    // Create agent first so we can pass its pendingReplies to the tool context
+    const agent = new Agent({
       agentId: id, role, skills,
       channels: this.channels,
       llm: this.llm,
-      tools,
+      tools: undefined as unknown as import('./tool-registry').ToolRegistry, // replaced below
       channelManager: this.channelManager,
       teamMemory,
     });
+    const tools = buildToolRegistry(this.buildToolContext(id, role, skills, teamMemory, agent));
+    agent.updateTools(tools);
+    // Wire DM sender back onto agent
+    agent._dmSender = (targetId, content, correlationId) =>
+      this.deliverDm(targetId, { from: id, content, correlationId });
+    return agent;
   }
 
   async boot(): Promise<void> {
@@ -235,7 +162,9 @@ export class Org {
             const teams = await this.loader.loadTeams();
             const teamName = this.loader.resolveTeam(role.id, teams);
             const teamMemory = this.getOrCreateTeamMemory(teamName);
-            const tools = this.buildToolRegistry(id, skills, teamMemory, role.level);
+            const tools = buildToolRegistry(
+              this.buildToolContext(id, role, skills, teamMemory, agent)
+            );
             agent.updateRoleAndSkills(role, skills, this.channels);
             agent.updateTools(tools);
           } catch (err) {

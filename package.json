@@ -9,7 +9,7 @@
     "build:ui": "bun build src/web/ui/index.tsx --outdir dist/ui --target browser"
   },
   "dependencies": {
-    "@chinmaymk/aikit": "^0.0.40",
+    "@mariozechner/pi-ai": "^0.52.12",
     "gray-matter": "^4.0.3",
     "hono": "^4.7.0",
     "pino": "^10.3.1",

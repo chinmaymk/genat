@@ -9,6 +9,15 @@ skills:
   - git-worktree
   - github-pr
   - github-issues
+tools:
+  - pull_work
+  - post_message
+  - ask
+  - reply
+  - read_skill
+  - run_cli
+  - save_memory
+  - search_memory
 model:
   provider: interview
 ---

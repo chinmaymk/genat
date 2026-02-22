@@ -12,6 +12,8 @@ export interface RoleConfig {
   level: string;
   reportsTo: string;
   skills: string[];
+  /** Tool names this role can use. If absent, all tools are available (backwards-compat). */
+  tools?: string[];
   model: { provider: string; pinned?: string };
   systemPrompt: string;
   /** Channel ids this role subscribes to (e.g. ["general", "engineering"]). If absent, subscribes to all. */

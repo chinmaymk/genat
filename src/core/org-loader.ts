@@ -57,6 +57,7 @@ export class OrgLoader {
       level: typeof fm.level === 'string' ? fm.level : 'ic',
       reportsTo: typeof fm.reports_to === 'string' ? fm.reports_to : typeof fm.reportsTo === 'string' ? fm.reportsTo : '',
       skills: Array.isArray(fm.skills) ? (fm.skills as string[]) : [],
+      tools: Array.isArray(fm.tools) ? (fm.tools as string[]) : undefined,
       model: (fm.model as { provider: string; pinned?: string }) ?? { provider: 'anthropic' },
       systemPrompt: body,
       channels: Array.isArray(fm.channels) ? (fm.channels as string[]) : undefined,

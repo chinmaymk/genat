@@ -1,4 +1,4 @@
-import type { Message, Tool, StreamResult } from '@chinmaymk/aikit';
+import type { Context, AssistantMessage, Tool } from '@mariozechner/pi-ai';
 import type { ILLMClient } from './llm-client';
 import { logger } from '../logger';
 
@@ -12,8 +12,20 @@ export interface DummyLLMClientOptions {
   fakeOutputTokens?: number;
 }
 
+function makeUsage(input: number, output: number): AssistantMessage['usage'] {
+  const total = input + output;
+  return {
+    input,
+    output,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: total,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
 /**
- * Dummy LLM backend that returns fixed or configurable responses without calling Anthropic/OpenAI.
+ * Dummy LLM backend that returns fixed or configurable responses without calling any real API.
  * Use for local testing and development. Enable with USE_DUMMY_LLM=1.
  */
 export class DummyLLMClient implements ILLMClient {
@@ -31,21 +43,24 @@ export class DummyLLMClient implements ILLMClient {
   }
 
   async chat(
-    messages: Message[],
-    _options?: { tools?: Tool[]; model?: string; provider?: string }
-  ): Promise<StreamResult> {
+    _context: Context,
+    options?: { model?: string; provider?: string }
+  ): Promise<AssistantMessage> {
     this.callCount++;
     const isFirstTurn = this.callCount === 1;
+    const tools = _context.tools ?? [];
+    const now = Date.now();
 
-    if (this.emitToolCallOnFirstTurn && isFirstTurn && _options?.tools?.length) {
-      const postMsg = _options.tools.find((t) => t.name === 'post_message');
+    if (this.emitToolCallOnFirstTurn && isFirstTurn && tools.length) {
+      const postMsg = tools.find((t: Tool) => t.name === 'post_message');
       if (postMsg) {
         logger.debug({ callCount: this.callCount }, 'Dummy LLM: emitting tool call');
         return {
-          content: 'I will post a reply to the channel.',
-          finishReason: 'tool_use',
-          toolCalls: [
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'I will post a reply to the channel.' },
             {
+              type: 'toolCall',
               id: `dummy-tool-${crypto.randomUUID()}`,
               name: 'post_message',
               arguments: {
@@ -54,24 +69,29 @@ export class DummyLLMClient implements ILLMClient {
               },
             },
           ],
-          usage: {
-            inputTokens: this.fakeInputTokens,
-            outputTokens: this.fakeOutputTokens,
-            totalTokens: this.fakeInputTokens + this.fakeOutputTokens,
-          },
+          api: 'anthropic-messages',
+          provider: 'anthropic',
+          model: options?.model ?? 'claude-sonnet-4-20250514',
+          usage: makeUsage(this.fakeInputTokens, this.fakeOutputTokens),
+          stopReason: 'toolUse',
+          timestamp: now,
         };
       }
     }
 
-    logger.debug({ callCount: this.callCount, defaultResponse: this.defaultResponse }, 'Dummy LLM: text response');
+    logger.debug(
+      { callCount: this.callCount, defaultResponse: this.defaultResponse },
+      'Dummy LLM: text response'
+    );
     return {
-      content: this.defaultResponse,
-      finishReason: 'stop',
-      usage: {
-        inputTokens: this.fakeInputTokens,
-        outputTokens: this.fakeOutputTokens,
-        totalTokens: this.fakeInputTokens + this.fakeOutputTokens,
-      },
+      role: 'assistant',
+      content: [{ type: 'text', text: this.defaultResponse }],
+      api: 'anthropic-messages',
+      provider: 'anthropic',
+      model: options?.model ?? 'claude-sonnet-4-20250514',
+      usage: makeUsage(this.fakeInputTokens, this.fakeOutputTokens),
+      stopReason: 'stop',
+      timestamp: now,
     };
   }
 }

@@ -1,29 +1,37 @@
-import { createTool, type Tool } from '@chinmaymk/aikit';
-
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  schema: object;
-  handler: (args: Record<string, any>) => Promise<string>;
-}
+import type { Tool, Static, TSchema } from '@mariozechner/pi-ai';
+import { validateToolArguments } from '@mariozechner/pi-ai';
 
 export class ToolRegistry {
-  private tools = new Map<string, ToolDefinition>();
+  private entries = new Map<
+    string,
+    { tool: Tool; handler: (args: Record<string, unknown>) => Promise<string> }
+  >();
 
-  register(def: ToolDefinition): this {
-    this.tools.set(def.name, def);
+  register<T extends TSchema>(
+    tool: Tool<T>,
+    handler: (args: Static<T>) => Promise<string>
+  ): this {
+    this.entries.set(tool.name, {
+      tool,
+      handler: handler as (args: Record<string, unknown>) => Promise<string>,
+    });
     return this;
   }
 
-  async execute(name: string, args: Record<string, any>): Promise<string> {
-    const def = this.tools.get(name);
-    if (!def) return `Unknown tool: ${name}`;
-    return def.handler(args);
+  async execute(name: string, args: Record<string, unknown>): Promise<string> {
+    const entry = this.entries.get(name);
+    if (!entry) return `Unknown tool: ${name}`;
+    const toolCall = {
+      type: 'toolCall' as const,
+      id: '',
+      name,
+      arguments: args,
+    };
+    const validated = validateToolArguments(entry.tool, toolCall);
+    return entry.handler(validated);
   }
 
   toolDefinitions(): Tool[] {
-    return Array.from(this.tools.values()).map((def) =>
-      createTool(def.name, def.description, def.schema as any)
-    );
+    return Array.from(this.entries.values()).map((e) => e.tool);
   }
 }

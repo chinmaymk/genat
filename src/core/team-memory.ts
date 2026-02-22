@@ -126,11 +126,18 @@ export class TeamMemory {
   }
 
   delete(id: string): void {
+    const row = this.db.prepare('SELECT rowid FROM memories WHERE id = ?').get(id) as { rowid: number } | undefined;
+    if (row) {
+      this.db.prepare(`INSERT INTO memories_fts(memories_fts, rowid, content, tags) VALUES ('delete', ?, '', '')`).run(row.rowid);
+    }
     this.stmtDelete.run(id);
   }
 
   deleteAll(): number {
     const result = this.db.prepare('DELETE FROM memories').run();
+    if (result.changes > 0) {
+      this.db.exec(`INSERT INTO memories_fts(memories_fts) VALUES ('delete-all')`);
+    }
     return result.changes;
   }
 

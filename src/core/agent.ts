@@ -1,7 +1,4 @@
-import {
-  systemText, userText, assistantText, assistantWithToolCalls, toolResult as toolResultMsg,
-  type Message,
-} from '@chinmaymk/aikit';
+import type { Context, Message, AssistantMessage } from '@mariozechner/pi-ai';
 import { Channel, ChannelManager, normalizeChannelName, type ChannelMessage } from './channel.ts';
 import { logger } from '../logger';
 import type { ILLMClient } from './llm-client';
@@ -183,10 +180,13 @@ export class Agent {
 
     const input = `${memoryPrefix}[Channel: #${msg.channel}]\n${threadText}`;
 
+    // Each message is handled with a fresh conversation; thread context is already in input
+    this.conversationHistory = [];
     const response = await this.think(input);
 
     if (response.trim() !== 'NO_ACTION') {
-      this.log.debug({ messageId: msg.id }, 'Response generated');
+      await this.send(msg.channel, response, rootId);
+      this.log.debug({ messageId: msg.id }, 'Response posted');
     } else {
       this.log.debug({ messageId: msg.id }, 'NO_ACTION — skipping reply');
     }
@@ -199,16 +199,17 @@ export class Agent {
   }
 
   private async think(input: string): Promise<string> {
-    const inputMsg = userText(input);
+    const inputMsg: Message = {
+      role: 'user',
+      content: input,
+      timestamp: Date.now(),
+    };
     this.conversationHistory.push(inputMsg);
 
     // Keep conversation history bounded to avoid huge prompts and rate limits
     if (this.conversationHistory.length > 24) {
       this.conversationHistory = this.conversationHistory.slice(-16);
     }
-
-    const sysMsg = systemText(this.buildSystemPrompt());
-    const loopMessages: Message[] = [sysMsg, ...this.conversationHistory];
 
     const modelId = this._role.model.pinned;
     const provider = this._role.model.provider === 'interview' ? 'anthropic' : this._role.model.provider;
@@ -222,56 +223,61 @@ export class Agent {
     while (iterations < MAX_ITERATIONS) {
       iterations++;
 
-      const response = await this.llm.chat(loopMessages, {
+      const context: Context = {
+        systemPrompt: this.buildSystemPrompt(),
+        messages: [...this.conversationHistory],
         tools: this.tools.toolDefinitions(),
+      };
+
+      const response: AssistantMessage = await this.llm.chat(context, {
         model: modelId,
         provider,
       });
 
-      const inputTok = response.usage?.inputTokens ?? 0;
-      const outputTok = response.usage?.outputTokens ?? 0;
+      const inputTok = response.usage?.input ?? 0;
+      const outputTok = response.usage?.output ?? 0;
       totalInputTokens += inputTok;
       totalOutputTokens += outputTok;
       this.log.debug({ iteration: iterations, inputTokens: inputTok, outputTokens: outputTok }, 'LLM call');
 
-      finalResponse = response.content;
+      const textBlocks = response.content.filter((b) => b.type === 'text');
+      finalResponse = textBlocks.map((b) => (b.type === 'text' ? b.text : '')).join('').trim();
 
-      if (!response.toolCalls || response.toolCalls.length === 0) {
-        // No tool calls — final text response
-        if (response.content) {
-          loopMessages.push(assistantText(response.content));
-        }
+      const toolCalls = response.content.filter((b) => b.type === 'toolCall');
+      this.conversationHistory.push(response);
+
+      if (toolCalls.length === 0) {
         break;
       }
 
-      // Assistant message with tool calls (proper format for the API)
-      loopMessages.push(assistantWithToolCalls(response.content, response.toolCalls));
-
-      // Execute each tool call and build proper tool result messages
-      for (const tc of response.toolCalls) {
+      for (const tc of toolCalls) {
+        if (tc.type !== 'toolCall') continue;
         let result: string;
         try {
-          result = await this.executeSingleTool(tc.name, tc.arguments as Record<string, any>);
+          result = await this.executeSingleTool(tc.name, tc.arguments as Record<string, unknown>);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.log.warn({ tool: tc.name, err }, 'Tool call failed');
           result = `ERROR: ${message}`;
         }
-        loopMessages.push(toolResultMsg(tc.id, result));
+        this.conversationHistory.push({
+          role: 'toolResult',
+          toolCallId: tc.id,
+          toolName: tc.name,
+          content: [{ type: 'text', text: result }],
+          isError: result.startsWith('ERROR:'),
+          timestamp: Date.now(),
+        });
       }
     }
 
     this.log.info({ totalInputTokens, totalOutputTokens, iterations }, 'Think turn complete');
 
-    if (finalResponse) {
-      this.conversationHistory.push(assistantText(finalResponse));
-    }
-
     return finalResponse;
   }
 
-  private async executeSingleTool(name: string, args: Record<string, any>): Promise<string> {
-    this.log.info({ tool: name }, 'Executing tool');
+  private async executeSingleTool(name: string, args: Record<string, unknown>): Promise<string> {
+    this.log.info({ tool: name, params: args }, 'Executing tool');
     return this.tools.execute(name, args);
   }
 }

@@ -118,6 +118,8 @@ export interface ToolContext {
   sendDm: (targetAgentId: string, content: string, correlationId?: string) => void;
   /** Pending reply resolvers for ask/reply pattern (owned by Agent, exposed here). */
   pendingReplies: Map<string, (reply: string) => void>;
+  /** Returns the agentId of the agent whose DM is currently being handled (for reply tool). */
+  _dmReplyTarget?: string;
   getExecutiveMemory?: () => TeamMemory;
 }
 
@@ -179,10 +181,7 @@ export function buildToolRegistry(context: ToolContext): ToolRegistry {
         parameters: replyParams,
       },
       async ({ correlationId, content }) => {
-        // The agent's handleDm will have set replyTo on the DM payload.
-        // We use a special convention: the tool stores the replyTo via context.
-        // The agent exposes _dmReplyTarget via context so we can send back.
-        const target = (context as ToolContext & { _dmReplyTarget?: string })._dmReplyTarget;
+        const target = context._dmReplyTarget;
         if (!target) return 'ERROR: No active DM to reply to';
         context.sendDm(target, content, correlationId);
         return 'Reply sent';

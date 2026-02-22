@@ -4,6 +4,7 @@ import type { SkillConfig } from '../agent';
 import type { ChannelManager } from '../channel';
 import type { TeamMemory } from '../team-memory';
 import type { ToolRunner } from '../tool-runner';
+import type { WorkQueueManager } from '../work-queue-manager';
 
 const postMessageParams = Type.Object({
   channel: Type.String({
@@ -16,6 +17,16 @@ const postMessageParams = Type.Object({
         'When replying to a thread, set to the root message id so the reply stays in-thread.',
     })
   ),
+});
+
+const askParams = Type.Object({
+  agentId: Type.String({ description: 'Agent ID to send the direct message to.' }),
+  content: Type.String({ description: 'Message content.' }),
+});
+
+const replyParams = Type.Object({
+  correlationId: Type.String({ description: 'The correlationId from the incoming DM to reply to.' }),
+  content: Type.String({ description: 'Reply content.' }),
 });
 
 const readSkillParams = Type.Object({
@@ -72,6 +83,27 @@ const searchMemoryParams = Type.Object({
   ),
 });
 
+const pushWorkParams = Type.Object({
+  queue: Type.String({ description: 'Work queue name (team name, e.g. "engineering").' }),
+  title: Type.String({ description: 'Task title.' }),
+  description: Type.String({ description: 'Task description and acceptance criteria.' }),
+  priority: Type.Optional(Type.Number({ description: 'Priority (lower = higher priority, default 5).' })),
+});
+
+const pullWorkParams = Type.Object({
+  queue: Type.String({ description: 'Work queue name to pull from (e.g. "engineering").' }),
+});
+
+const createChannelParams = Type.Object({
+  name: Type.String({ description: 'Channel name (no spaces, use hyphens).' }),
+  members: Type.Array(Type.String(), { description: 'Agent IDs to invite as initial members.' }),
+});
+
+const inviteParams = Type.Object({
+  channel: Type.String({ description: 'Channel name.' }),
+  agentId: Type.String({ description: 'Agent ID to invite.' }),
+});
+
 export interface ToolContext {
   agentId: string;
   channelManager: ChannelManager;
@@ -79,12 +111,27 @@ export interface ToolContext {
   skills: SkillConfig[];
   teamMemory: TeamMemory;
   level: string;
+  /** Tool names this agent is allowed to use. If undefined, NO tools are registered. */
+  allowedTools?: string[];
+  workQueueManager: WorkQueueManager;
+  /** Send a DM to another agent (wired up by Org). */
+  sendDm: (targetAgentId: string, content: string, correlationId?: string) => void;
+  /** Pending reply resolvers for ask/reply pattern (owned by Agent, exposed here). */
+  pendingReplies: Map<string, (reply: string) => void>;
   getExecutiveMemory?: () => TeamMemory;
 }
 
 export function buildToolRegistry(context: ToolContext): ToolRegistry {
-  return new ToolRegistry()
-    .register(
+  const reg = new ToolRegistry();
+
+  // If allowedTools is not defined, register nothing.
+  if (!context.allowedTools) return reg;
+
+  const allowed = new Set(context.allowedTools);
+  const permit = (name: string) => allowed.has(name);
+
+  if (permit('post_message')) {
+    reg.register(
       {
         name: 'post_message',
         description:
@@ -95,12 +142,60 @@ export function buildToolRegistry(context: ToolContext): ToolRegistry {
         context.channelManager.post(channel, context.agentId, content, threadId);
         return `Message posted to #${channel}`;
       }
-    )
-    .register(
+    );
+  }
+
+  if (permit('ask')) {
+    reg.register(
+      {
+        name: 'ask',
+        description:
+          'Send a direct message to a specific agent and wait for their reply. Use for questions, help requests, or status checks that require a response.',
+        parameters: askParams,
+      },
+      async ({ agentId, content }) => {
+        const correlationId = crypto.randomUUID();
+        return new Promise<string>((resolve) => {
+          const timeout = setTimeout(() => {
+            context.pendingReplies.delete(correlationId);
+            resolve('ERROR: ask() timed out — no reply received within 30s');
+          }, 30000);
+          context.pendingReplies.set(correlationId, (reply: string) => {
+            clearTimeout(timeout);
+            resolve(reply);
+          });
+          context.sendDm(agentId, content, correlationId);
+        });
+      }
+    );
+  }
+
+  if (permit('reply')) {
+    reg.register(
+      {
+        name: 'reply',
+        description:
+          'Reply to a direct message (DM) you received. Use the correlationId from the incoming DM.',
+        parameters: replyParams,
+      },
+      async ({ correlationId, content }) => {
+        // The agent's handleDm will have set replyTo on the DM payload.
+        // We use a special convention: the tool stores the replyTo via context.
+        // The agent exposes _dmReplyTarget via context so we can send back.
+        const target = (context as ToolContext & { _dmReplyTarget?: string })._dmReplyTarget;
+        if (!target) return 'ERROR: No active DM to reply to';
+        context.sendDm(target, content, correlationId);
+        return 'Reply sent';
+      }
+    );
+  }
+
+  if (permit('read_skill')) {
+    reg.register(
       {
         name: 'read_skill',
         description:
-          'Get the full skill documentation (name, id, what it does, what arguments the CLI expects). Use this before execute_cli when you need to see how to invoke a skill or what args to pass. Does not run anything.',
+          'Get the full skill documentation. Use this before execute_cli to see how to invoke a skill and what args to pass.',
         parameters: readSkillParams,
       },
       async ({ skill }) => {
@@ -108,55 +203,55 @@ export function buildToolRegistry(context: ToolContext): ToolRegistry {
         if (!skillConfig) return `Skill "${skill}" not found.`;
         return `# ${skillConfig.name} (${skillConfig.id})\nCLI command: ${skillConfig.tool}\n\n${skillConfig.content}`;
       }
-    )
-    .register(
+    );
+  }
+
+  if (permit('run_cli')) {
+    reg.register(
       {
-        name: 'execute_cli',
+        name: 'run_cli',
         description:
-          'Run the CLI command for one of your skills. Only use for executing the actual command—use read_skill to look up what the skill does and what arguments it expects. Do not use for posting messages or memory (use post_message or save_memory).',
+          'Run the CLI command for one of your skills. Use read_skill first to look up args.',
         parameters: executeCliParams,
       },
       async ({ skill, args, cwd }) => {
         const skillConfig = context.skills.find((s) => s.id === skill);
         if (!skillConfig) return `Skill "${skill}" not found`;
-        const result = await context.toolRunner.execute({
-          tool: skillConfig.tool,
-          args,
-          cwd,
-        });
+        const result = await context.toolRunner.execute({ tool: skillConfig.tool, args, cwd });
         return JSON.stringify({
           exitCode: result.exitCode,
           stdout: result.stdout.slice(0, 4000),
           stderr: result.stderr.slice(0, 1000),
         });
       }
-    )
-    .register(
+    );
+  }
+
+  if (permit('save_memory')) {
+    reg.register(
       {
         name: 'save_memory',
         description:
-          'Persist something to team memory so you or other agents can use it later. Use after completing work, making a decision, or learning something useful. Do not use for sending messages (use post_message) or running commands (use execute_cli).',
+          'Persist something to team memory so you or other agents can use it later.',
         parameters: saveMemoryParams,
       },
       async ({ type, content, tags }) => {
         try {
-          const id = context.teamMemory.save(
-            context.agentId,
-            type,
-            content,
-            tags ?? ''
-          );
+          const id = context.teamMemory.save(context.agentId, type, content, tags ?? '');
           return `Memory saved (id: ${id})`;
         } catch (err) {
           return `Memory save failed: ${err instanceof Error ? err.message : String(err)}`;
         }
       }
-    )
-    .register(
+    );
+  }
+
+  if (permit('search_memory')) {
+    reg.register(
       {
         name: 'search_memory',
         description:
-          'Look up past team memory by topic or question. Use at the start of a task or when you need context (e.g. how something was done, a past decision, or a fact). Returns matching lessons, decisions, and facts. Do not use for saving (use save_memory) or chatting (use post_message).',
+          'Look up past team memory by topic or question.',
         parameters: searchMemoryParams,
       },
       async ({ query, type, limit }) => {
@@ -178,14 +273,74 @@ export function buildToolRegistry(context: ToolContext): ToolRegistry {
           }
           if (results.length === 0) return 'No matching memories found.';
           return results
-            .map(
-              (r) =>
-                `[${r.type}][${r.agentId}] ${r.content} (tags: ${r.tags})`
-            )
+            .map((r) => `[${r.type}][${r.agentId}] ${r.content} (tags: ${r.tags})`)
             .join('\n');
         } catch (err) {
           return `Memory search failed: ${err instanceof Error ? err.message : String(err)}`;
         }
       }
     );
+  }
+
+  if (permit('push_work')) {
+    reg.register(
+      {
+        name: 'push_work',
+        description: 'Add a task to a team work queue. Use to delegate work to your team.',
+        parameters: pushWorkParams,
+      },
+      async ({ queue, title, description, priority }) => {
+        const q = context.workQueueManager.getOrCreate(queue);
+        q.push({ title, description, priority: priority ?? 5 });
+        return `Task "${title}" added to queue "${queue}"`;
+      }
+    );
+  }
+
+  if (permit('pull_work')) {
+    reg.register(
+      {
+        name: 'pull_work',
+        description:
+          'Pull the next task from a work queue. Blocks until work is available. Use when you are ready to take on new work.',
+        parameters: pullWorkParams,
+      },
+      async ({ queue }) => {
+        const q = context.workQueueManager.get(queue);
+        if (!q) return `Work queue "${queue}" does not exist`;
+        const item = await q.pull();
+        return JSON.stringify(item);
+      }
+    );
+  }
+
+  if (permit('create_channel')) {
+    reg.register(
+      {
+        name: 'create_channel',
+        description: 'Create a new project channel and invite initial members.',
+        parameters: createChannelParams,
+      },
+      async ({ name, members }) => {
+        context.channelManager.createDynamic(name, members);
+        return `Channel #${name} created with ${members.length} members`;
+      }
+    );
+  }
+
+  if (permit('invite_to_channel')) {
+    reg.register(
+      {
+        name: 'invite_to_channel',
+        description: 'Invite an agent to an existing channel.',
+        parameters: inviteParams,
+      },
+      async ({ channel, agentId }) => {
+        context.channelManager.invite(channel, agentId);
+        return `${agentId} invited to #${channel}`;
+      }
+    );
+  }
+
+  return reg;
 }

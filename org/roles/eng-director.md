@@ -9,6 +9,18 @@ skills:
   - github-pr
   - pr-review
   - github-issues
+tools:
+  - pull_work
+  - push_work
+  - post_message
+  - ask
+  - reply
+  - read_skill
+  - run_cli
+  - save_memory
+  - search_memory
+  - create_channel
+  - invite_to_channel
 model:
   provider: interview
 ---
